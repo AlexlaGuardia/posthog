@@ -1,1 +1,1 @@
-0024_alter_externaldataschema_sync_type
+0025_add_warehouse_column_annotation
