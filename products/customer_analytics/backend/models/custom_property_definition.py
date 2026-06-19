@@ -1,6 +1,3 @@
-from datetime import datetime
-from typing import Any
-
 from django.db import models
 
 from posthog.models.scoping.root_mixin import TeamScopedRootMixin
@@ -39,31 +36,3 @@ class CustomPropertyDefinition(TeamScopedRootMixin, UUIDModel, CreatedMetaFields
                 name="unique_custom_property_per_team",
             )
         ]
-
-    def coerce_value(self, value: Any) -> float | str | bool:
-        match self.type:
-            case self.Type.Numeric:
-                try:
-                    return float(value)
-                except (TypeError, ValueError):
-                    raise ValueError(f"Custom property '{self.name}' expects a numeric value")
-
-            case self.Type.Boolean:
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-                    return value.strip().lower() == "true"
-                raise ValueError(f"Custom property '{self.name}' expects a boolean value")
-
-            case self.Type.Datetime:
-                if isinstance(value, datetime):
-                    return value.isoformat()
-                if isinstance(value, str):
-                    try:
-                        return datetime.fromisoformat(value).isoformat()
-                    except ValueError:
-                        raise ValueError(f"Custom property '{self.name}' expects an ISO-8601 datetime")
-                raise ValueError(f"Custom property '{self.name}' expects an ISO-8601 datetime")
-
-            case self.Type.String | _:
-                return value if isinstance(value, str) else str(value)
