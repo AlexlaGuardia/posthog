@@ -24,6 +24,7 @@ from posthog.hogql.printer.duckdb import DuckDBPrinter
 from posthog.hogql.printer.hogql import HogQLPrinter
 from posthog.hogql.printer.mysql import MySQLPrinter
 from posthog.hogql.printer.postgres import PostgresPrinter
+from posthog.hogql.printer.snowflake import SnowflakePrinter
 from posthog.hogql.resolver import ResolverFactory, resolve_types
 from posthog.hogql.transforms.clickhouse_property_resolution import clickhouse_property_resolution
 from posthog.hogql.transforms.events_predicate_pushdown import apply_events_predicate_pushdown, events_pushdown_enabled
@@ -299,6 +300,13 @@ def print_prepared_ast(
                 )
             case "mysql":
                 printer = MySQLPrinter(
+                    context=context,
+                    stack=printer_stack,
+                    settings=settings,
+                    pretty=pretty,
+                )
+            case "snowflake":
+                printer = SnowflakePrinter(
                     context=context,
                     stack=printer_stack,
                     settings=settings,
