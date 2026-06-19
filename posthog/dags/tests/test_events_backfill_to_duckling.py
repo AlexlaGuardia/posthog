@@ -25,6 +25,8 @@ class TestResolveDucklingTarget:
                 "posthog.dags.events_backfill_to_duckling.derive_duckling_bucket",
                 return_value=("derived-bucket", "us-east-1"),
             ) as mock_derive,
+            # The per-environment table-name lookup hits the DB; this suite stays DB-free.
+            patch("posthog.dags.events_backfill_to_duckling._resolve_table_names", return_value=("events", "persons")),
         ):
             target = _resolve_duckling_target(team_id=123)
         return target, mock_derive
