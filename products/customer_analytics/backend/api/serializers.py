@@ -11,7 +11,12 @@ from posthog.api.tagged_item import TaggedItemSerializerMixin
 from posthog.exceptions import Conflict
 from posthog.models import OrganizationMembership
 
-from products.customer_analytics.backend.models import Account, CustomerJourney, CustomerProfileConfig
+from products.customer_analytics.backend.models import (
+    Account,
+    CustomerJourney,
+    CustomerProfileConfig,
+    CustomPropertyDefinition,
+)
 from products.notebooks.backend.models import Notebook
 
 _ACCOUNT_ASSIGNMENT_SCHEMA = {
@@ -309,3 +314,113 @@ class AccountNotebookSerializer(serializers.ModelSerializer):
             "last_modified_at",
             "last_modified_by",
         ]
+
+
+class CustomPropertyDefinitionSerializer(serializers.ModelSerializer):
+    """A team-scoped definition of a custom account property — the attribute side of the model.
+
+    Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+    stored separately, so this serializer never reads or writes account values.
+    """
+
+    name = serializers.CharField(
+        max_length=400,
+        help_text="Human-readable name of the custom property. Unique within the team.",
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Optional description of what the property represents.",
+    )
+    type = serializers.ChoiceField(
+        choices=CustomPropertyDefinition.Type.choices,
+        help_text="Value type: 'string', 'numeric', 'boolean', or 'datetime'.",
+    )
+    format = serializers.ChoiceField(
+        choices=CustomPropertyDefinition.Format.choices,
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', "
+            "'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; "
+            "must be empty for 'string' and 'boolean'."
+        ),
+    )
+    is_big_number = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties.",
+    )
+
+    class Meta:
+        model = CustomPropertyDefinition
+        fields = [
+            "id",
+            "name",
+            "description",
+            "type",
+            "format",
+            "is_big_number",
+            "created_at",
+            "created_by",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "created_by", "updated_at"]
+
+    _NUMERIC_FORMATS = frozenset(
+        {
+            CustomPropertyDefinition.Format.Decimal,
+            CustomPropertyDefinition.Format.Currency,
+            CustomPropertyDefinition.Format.Percent,
+            CustomPropertyDefinition.Format.PercentFraction,
+        }
+    )
+    _DATETIME_FORMATS = frozenset(
+        {
+            CustomPropertyDefinition.Format.Date,
+            CustomPropertyDefinition.Format.DateTime,
+        }
+    )
+
+    def validate(self, attrs):
+        type_ = attrs.get("type") or getattr(self.instance, "type", None)
+        format_ = attrs.get("format") if "format" in attrs else getattr(self.instance, "format", None)
+        is_big_number = attrs.get("is_big_number")
+        if is_big_number is None:
+            is_big_number = getattr(self.instance, "is_big_number", False)
+
+        if type_ in (CustomPropertyDefinition.Type.String, CustomPropertyDefinition.Type.Boolean):
+            if format_:
+                raise serializers.ValidationError({"format": f"A '{type_}' property must not have a format."})
+        elif type_ == CustomPropertyDefinition.Type.Numeric:
+            if format_ not in self._NUMERIC_FORMATS:
+                raise serializers.ValidationError(
+                    {
+                        "format": "A numeric property requires a numeric format: decimal, currency, percent, or percent_fraction."
+                    }
+                )
+        elif type_ == CustomPropertyDefinition.Type.Datetime:
+            if format_ not in self._DATETIME_FORMATS:
+                raise serializers.ValidationError(
+                    {"format": "A datetime property requires a date or date-time format."}
+                )
+
+        if type_ != CustomPropertyDefinition.Type.Numeric and is_big_number:
+            attrs["is_big_number"] = False
+
+        return attrs
+
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        validated_data["team_id"] = self.context["team_id"]
+        try:
+            return super().create(validated_data)
+        except IntegrityError:
+            raise Conflict("A custom property with this name already exists for this team.")
+
+    def update(self, instance, validated_data):
+        try:
+            return super().update(instance, validated_data)
+        except IntegrityError:
+            raise Conflict("A custom property with this name already exists for this team.")

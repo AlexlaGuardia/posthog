@@ -13898,6 +13898,85 @@ export namespace Schemas {
       source: string;
     }
 
+    /**
+     * * `string` - String
+     * * `numeric` - Numeric
+     * * `boolean` - Boolean
+     * * `datetime` - DateTime
+     */
+    export type CustomPropertyDefinitionTypeEnum = typeof CustomPropertyDefinitionTypeEnum[keyof typeof CustomPropertyDefinitionTypeEnum];
+
+
+    export const CustomPropertyDefinitionTypeEnum = {
+      String: 'string',
+      Numeric: 'numeric',
+      Boolean: 'boolean',
+      Datetime: 'datetime',
+    } as const;
+
+    /**
+     * * `currency` - Currency
+     * * `decimal` - Decimal
+     * * `YYYY-MM-DD` - YYYY-MM-DD
+     * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
+     * * `percent_fraction` - Percent Fraction
+     * * `percent` - Percent
+     */
+    export type CustomPropertyDefinitionFormatEnum = typeof CustomPropertyDefinitionFormatEnum[keyof typeof CustomPropertyDefinitionFormatEnum];
+
+
+    export const CustomPropertyDefinitionFormatEnum = {
+      Currency: 'currency',
+      Decimal: 'decimal',
+      YyyyMmDd: 'YYYY-MM-DD',
+      YYYYMMDDHhMmSs: 'YYYY-MM-DD hh:mm:ss',
+      PercentFraction: 'percent_fraction',
+      Percent: 'percent',
+    } as const;
+
+    /**
+     * A team-scoped definition of a custom account property — the attribute side of the model.
+     *
+     * Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+     * stored separately, so this serializer never reads or writes account values.
+     */
+    export interface CustomPropertyDefinition {
+      readonly id: string;
+      /**
+         * Human-readable name of the custom property. Unique within the team.
+         * @maxLength 400
+         */
+      name: string;
+      /**
+         * Optional description of what the property represents.
+         * @nullable
+         */
+      description?: string | null;
+      /** Value type: 'string', 'numeric', 'boolean', or 'datetime'.
+       *
+       * * `string` - String
+       * * `numeric` - Numeric
+       * * `boolean` - Boolean
+       * * `datetime` - DateTime */
+      type: CustomPropertyDefinitionTypeEnum;
+      /** Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.
+       *
+       * * `currency` - Currency
+       * * `decimal` - Decimal
+       * * `YYYY-MM-DD` - YYYY-MM-DD
+       * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
+       * * `percent_fraction` - Percent Fraction
+       * * `percent` - Percent */
+      format?: CustomPropertyDefinitionFormatEnum | null;
+      /** Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties. */
+      is_big_number?: boolean;
+      readonly created_at: string;
+      /** @nullable */
+      readonly created_by: number | null;
+      /** @nullable */
+      readonly updated_at: string | null;
+    }
+
     export interface CustomerJourney {
       readonly id: string;
       insight: number;
@@ -29334,6 +29413,15 @@ export namespace Schemas {
       results: CoreEvent[];
     }
 
+    export interface PaginatedCustomPropertyDefinitionList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: CustomPropertyDefinition[];
+    }
+
     export interface PaginatedCustomerJourneyList {
       count: number;
       /** @nullable */
@@ -34353,6 +34441,49 @@ export namespace Schemas {
       filter?: unknown;
       readonly created_at?: string;
       readonly updated_at?: string;
+    }
+
+    /**
+     * A team-scoped definition of a custom account property — the attribute side of the model.
+     *
+     * Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+     * stored separately, so this serializer never reads or writes account values.
+     */
+    export interface PatchedCustomPropertyDefinition {
+      readonly id?: string;
+      /**
+         * Human-readable name of the custom property. Unique within the team.
+         * @maxLength 400
+         */
+      name?: string;
+      /**
+         * Optional description of what the property represents.
+         * @nullable
+         */
+      description?: string | null;
+      /** Value type: 'string', 'numeric', 'boolean', or 'datetime'.
+       *
+       * * `string` - String
+       * * `numeric` - Numeric
+       * * `boolean` - Boolean
+       * * `datetime` - DateTime */
+      type?: CustomPropertyDefinitionTypeEnum;
+      /** Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.
+       *
+       * * `currency` - Currency
+       * * `decimal` - Decimal
+       * * `YYYY-MM-DD` - YYYY-MM-DD
+       * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
+       * * `percent_fraction` - Percent Fraction
+       * * `percent` - Percent */
+      format?: CustomPropertyDefinitionFormatEnum | null;
+      /** Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties. */
+      is_big_number?: boolean;
+      readonly created_at?: string;
+      /** @nullable */
+      readonly created_by?: number | null;
+      /** @nullable */
+      readonly updated_at?: string | null;
     }
 
     export interface PatchedCustomerJourney {
@@ -50836,6 +50967,17 @@ export namespace Schemas {
     offset?: number;
     };
 
+    export type EnvironmentsCustomPropertyDefinitionsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    };
+
     export type EnvironmentsCustomerJourneysListParams = {
     /**
      * Number of results to return per page.
@@ -56508,6 +56650,17 @@ export namespace Schemas {
     };
 
     export type CoreMemoryListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    };
+
+    export type CustomPropertyDefinitionsListParams = {
     /**
      * Number of results to return per page.
      */

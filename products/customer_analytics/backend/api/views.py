@@ -14,7 +14,12 @@ from posthog.api.tagged_item import TaggedItemViewSetMixin
 from posthog.api.utils import log_activity_from_viewset
 from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
 
-from products.customer_analytics.backend.models import Account, CustomerJourney, CustomerProfileConfig
+from products.customer_analytics.backend.models import (
+    Account,
+    CustomerJourney,
+    CustomerProfileConfig,
+    CustomPropertyDefinition,
+)
 from products.notebooks.backend.models import Notebook, ResourceNotebook
 
 from ee.hogai.tools.create_notebook.tiptap import markdown_to_tiptap_nodes
@@ -24,6 +29,7 @@ from .serializers import (
     AccountSerializer,
     CustomerJourneySerializer,
     CustomerProfileConfigSerializer,
+    CustomPropertyDefinitionSerializer,
 )
 from .utils import log_customer_profile_config_activity
 
@@ -61,6 +67,28 @@ class CustomerJourneyViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, 
 
     def safely_get_queryset(self, queryset):
         return queryset.filter(team_id=self.team.id)
+
+    def perform_create(self, serializer):
+        serializer.save()
+        log_activity_from_viewset(self, serializer.instance, name=serializer.instance.name)
+
+    def perform_update(self, serializer):
+        previous = self.get_object()
+        serializer.save()
+        log_activity_from_viewset(self, serializer.instance, name=serializer.instance.name, previous=previous)
+
+    def perform_destroy(self, instance):
+        log_activity_from_viewset(self, instance, activity="deleted", name=instance.name)
+        super().perform_destroy(instance)
+
+
+class CustomPropertyDefinitionViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, viewsets.ModelViewSet):
+    scope_object = "account"
+    queryset = CustomPropertyDefinition.objects.unscoped()
+    serializer_class = CustomPropertyDefinitionSerializer
+
+    def safely_get_queryset(self, queryset):
+        return queryset.filter(team_id=self.team.id).order_by("name")
 
     def perform_create(self, serializer):
         serializer.save()

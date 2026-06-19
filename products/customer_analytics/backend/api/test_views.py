@@ -12,7 +12,12 @@ from posthog.models.organization import OrganizationMembership
 from posthog.models.team import Team
 from posthog.models.user import User
 
-from products.customer_analytics.backend.models import Account, CustomerJourney, CustomerProfileConfig
+from products.customer_analytics.backend.models import (
+    Account,
+    CustomerJourney,
+    CustomerProfileConfig,
+    CustomPropertyDefinition,
+)
 from products.customer_analytics.backend.models.account import AccountAssignment
 from products.notebooks.backend.models import Notebook, ResourceNotebook
 from products.product_analytics.backend.models.insight import Insight
@@ -1485,3 +1490,153 @@ class TestCustomerAnalyticsAccessControl(APIBaseTest):
 
         create_response = self.client.post(url, {"title": "x"}, format="json")
         self.assertEqual(create_response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class TestCustomPropertyDefinitionViewSet(APIBaseTest):
+    def setUp(self):
+        super().setUp()
+        self.endpoint_base = f"/api/environments/{self.team.id}/custom_property_definitions/"
+
+    def _create(self, **overrides):
+        payload = {"name": "ARR", "type": "numeric", "format": "currency", "is_big_number": True}
+        payload.update(overrides)
+        return self.client.post(self.endpoint_base, payload, format="json")
+
+    def test_create_success(self):
+        response = self._create()
+
+        self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
+        data = response.json()
+        self.assertEqual(data["name"], "ARR")
+        self.assertEqual(data["type"], "numeric")
+        self.assertEqual(data["format"], "currency")
+        self.assertTrue(data["is_big_number"])
+        self.assertIn("id", data)
+        self.assertIn("created_at", data)
+
+        # nosemgrep: idor-lookup-without-team (test assertion)
+        definition = CustomPropertyDefinition.objects.unscoped().get(id=data["id"])
+        self.assertEqual(definition.team, self.team)
+        self.assertEqual(definition.created_by, self.user)
+
+    def test_create_string_property_without_format(self):
+        response = self._create(name="Tier", type="string", format=None, is_big_number=False)
+
+        self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
+        self.assertIsNone(response.json()["format"])
+
+    @parameterized.expand(
+        [
+            ("string_ok", {"name": "P", "type": "string"}, status.HTTP_201_CREATED),
+            ("string_with_format", {"name": "P", "type": "string", "format": "currency"}, status.HTTP_400_BAD_REQUEST),
+            ("boolean_ok", {"name": "P", "type": "boolean"}, status.HTTP_201_CREATED),
+            ("boolean_with_format", {"name": "P", "type": "boolean", "format": "decimal"}, status.HTTP_400_BAD_REQUEST),
+            ("numeric_decimal", {"name": "P", "type": "numeric", "format": "decimal"}, status.HTTP_201_CREATED),
+            ("numeric_currency", {"name": "P", "type": "numeric", "format": "currency"}, status.HTTP_201_CREATED),
+            ("numeric_percent", {"name": "P", "type": "numeric", "format": "percent"}, status.HTTP_201_CREATED),
+            ("numeric_no_format", {"name": "P", "type": "numeric"}, status.HTTP_400_BAD_REQUEST),
+            (
+                "numeric_date_format",
+                {"name": "P", "type": "numeric", "format": "YYYY-MM-DD"},
+                status.HTTP_400_BAD_REQUEST,
+            ),
+            ("datetime_date", {"name": "P", "type": "datetime", "format": "YYYY-MM-DD"}, status.HTTP_201_CREATED),
+            (
+                "datetime_datetime",
+                {"name": "P", "type": "datetime", "format": "YYYY-MM-DD hh:mm:ss"},
+                status.HTTP_201_CREATED,
+            ),
+            (
+                "datetime_currency",
+                {"name": "P", "type": "datetime", "format": "currency"},
+                status.HTTP_400_BAD_REQUEST,
+            ),
+        ]
+    )
+    def test_type_format_validation(self, _name, payload, expected_status):
+        response = self.client.post(self.endpoint_base, payload, format="json")
+        self.assertEqual(expected_status, response.status_code, response.json())
+
+    def test_is_big_number_forced_false_for_non_numeric(self):
+        response = self._create(name="Tier", type="string", format=None, is_big_number=True)
+
+        self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
+        self.assertFalse(response.json()["is_big_number"])
+
+    def test_create_with_duplicate_name_returns_409(self):
+        self._create(name="ARR")
+
+        response = self._create(name="ARR")
+
+        self.assertEqual(status.HTTP_409_CONFLICT, response.status_code, response.json())
+
+    def test_list_returns_only_current_team_ordered_by_name(self):
+        self._create(name="Beta", type="string", format=None)
+        self._create(name="Alpha", type="string", format=None)
+        other_team = Team.objects.create(organization=self.organization)
+        # nosemgrep: idor-lookup-without-team (test setup for another team)
+        CustomPropertyDefinition.objects.unscoped().create(team=other_team, name="Gamma", type="string")
+
+        response = self.client.get(self.endpoint_base)
+
+        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        self.assertEqual([row["name"] for row in response.json()["results"]], ["Alpha", "Beta"])
+
+    def test_update_name(self):
+        created = self._create(name="ARR").json()
+
+        response = self.client.patch(f"{self.endpoint_base}{created['id']}/", {"name": "Annual revenue"}, format="json")
+
+        self.assertEqual(status.HTTP_200_OK, response.status_code, response.json())
+        self.assertEqual(response.json()["name"], "Annual revenue")
+
+    def test_update_to_duplicate_name_returns_409(self):
+        self._create(name="ARR")
+        other = self._create(name="MRR").json()
+
+        response = self.client.patch(f"{self.endpoint_base}{other['id']}/", {"name": "ARR"}, format="json")
+
+        self.assertEqual(status.HTTP_409_CONFLICT, response.status_code, response.json())
+
+    def test_type_is_editable(self):
+        created = self._create(name="Field", type="string", format=None).json()
+
+        response = self.client.patch(
+            f"{self.endpoint_base}{created['id']}/",
+            {"name": "Field", "type": "numeric", "format": "decimal", "is_big_number": False},
+            format="json",
+        )
+
+        self.assertEqual(status.HTTP_200_OK, response.status_code, response.json())
+        self.assertEqual(response.json()["type"], "numeric")
+        self.assertEqual(response.json()["format"], "decimal")
+
+    def test_delete_removes_definition_only(self):
+        keep = self._create(name="Keep", type="string", format=None).json()
+        remove = self._create(name="Remove", type="string", format=None).json()
+
+        response = self.client.delete(f"{self.endpoint_base}{remove['id']}/")
+
+        self.assertEqual(status.HTTP_204_NO_CONTENT, response.status_code)
+        # nosemgrep: idor-lookup-without-team (test assertion)
+        self.assertFalse(CustomPropertyDefinition.objects.unscoped().filter(id=remove["id"]).exists())
+        # nosemgrep: idor-lookup-without-team (test assertion)
+        self.assertTrue(CustomPropertyDefinition.objects.unscoped().filter(id=keep["id"]).exists())
+
+    def test_cannot_access_other_teams_definition(self):
+        other_team = Team.objects.create(organization=self.organization)
+        # nosemgrep: idor-lookup-without-team (test setup for another team)
+        other_def = CustomPropertyDefinition.objects.unscoped().create(team=other_team, name="Other", type="string")
+
+        response = self.client.get(f"{self.endpoint_base}{other_def.id}/")
+
+        self.assertEqual(status.HTTP_404_NOT_FOUND, response.status_code)
+
+    def test_activity_log_on_create_and_delete(self):
+        created = self._create(name="ARR").json()
+        self.client.delete(f"{self.endpoint_base}{created['id']}/")
+
+        logs = ActivityLog.objects.filter(
+            team_id=self.team.id, scope="CustomPropertyDefinition", item_id=str(created["id"])
+        )
+        self.assertEqual(set(logs.values_list("activity", flat=True)), {"created", "deleted"})
