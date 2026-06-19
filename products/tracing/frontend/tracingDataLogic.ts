@@ -95,11 +95,13 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
         clearSpans: true,
         cancelInProgressSpans: (controller: AbortController | null) => ({ controller }),
         cancelInProgressSparkline: (controller: AbortController | null) => ({ controller }),
+        cancelInProgressMatchingCounts: (controller: AbortController | null) => ({ controller }),
         cancelInProgressDurationHistogram: (controller: AbortController | null) => ({ controller }),
         cancelInProgressAggregation: (controller: AbortController | null) => ({ controller }),
         cancelInProgressSpanTree: (controller: AbortController | null) => ({ controller }),
         setSpansAbortController: (controller: AbortController | null) => ({ controller }),
         setSparklineAbortController: (controller: AbortController | null) => ({ controller }),
+        setMatchingCountsAbortController: (controller: AbortController | null) => ({ controller }),
         setDurationHistogramAbortController: (controller: AbortController | null) => ({ controller }),
         setAggregationAbortController: (controller: AbortController | null) => ({ controller }),
         setSpanTreeAbortController: (controller: AbortController | null) => ({ controller }),
@@ -128,6 +130,10 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
         sparklineAbortController: [
             null as AbortController | null,
             { setSparklineAbortController: (_, { controller }) => controller },
+        ],
+        matchingCountsAbortController: [
+            null as AbortController | null,
+            { setMatchingCountsAbortController: (_, { controller }) => controller },
         ],
         durationHistogramAbortController: [
             null as AbortController | null,
@@ -281,6 +287,7 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
                                 values.filters.serviceNames.length > 0 ? values.filters.serviceNames : undefined,
                             filterGroup: values.filters.filterGroup as PropertyGroupFilter,
                             prefetchSpans: PREFETCH_SPANS,
+                            flatSpans: values.filters.viewMode === 'spans',
                             limit: DEFAULT_PAGE_SIZE,
                         },
                         controller.signal
@@ -300,10 +307,10 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
                     actions.cancelInProgressSpans(controller)
 
                     // Duration ordering paginates by offset (it has no keyset cursor); timestamp
-                    // ordering uses the `after` cursor. Offset is the count of traces already shown.
+                    // ordering uses the `after` cursor. Offset is the count of rows already shown.
                     const pagination =
                         values.filters.orderBy === 'duration'
-                            ? { offset: values.rootSpans.length }
+                            ? { offset: values.listRows.length }
                             : { after: values.nextCursor ?? undefined }
 
                     const response = await api.tracing.listSpans(
@@ -315,6 +322,7 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
                                 values.filters.serviceNames.length > 0 ? values.filters.serviceNames : undefined,
                             filterGroup: values.filters.filterGroup as PropertyGroupFilter,
                             prefetchSpans: PREFETCH_SPANS,
+                            flatSpans: values.filters.viewMode === 'spans',
                             limit: DEFAULT_PAGE_SIZE,
                             ...pagination,
                         },
@@ -491,6 +499,28 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
                 },
             },
         ],
+        matchingCounts: [
+            { count: 0, traceCount: 0 } as { count: number; traceCount: number },
+            {
+                fetchMatchingCounts: async () => {
+                    const controller = new AbortController()
+                    actions.cancelInProgressMatchingCounts(controller)
+
+                    const response = await api.tracing.count(
+                        {
+                            dateRange: values.utcDateRange,
+                            serviceNames:
+                                values.filters.serviceNames.length > 0 ? values.filters.serviceNames : undefined,
+                            filterGroup: values.filters.filterGroup as PropertyGroupFilter,
+                        },
+                        controller.signal
+                    )
+
+                    actions.setMatchingCountsAbortController(null)
+                    return response
+                },
+            },
+        ],
         rawDurationHistogram: [
             [] as DurationHistogramRow[],
             {
@@ -567,25 +597,31 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
                 return { data, labels, dates }
             },
         ],
-        totalSpansMatchingFilters: [
-            (s) => [s.rawSparklineData],
-            (rows: SparklineRow[]): number => rows.reduce((sum, item) => sum + item.count, 0),
+        // Total matching the filters, in the unit the list is showing: distinct traces in 'traces'
+        // mode, individual spans in 'spans' mode. Fed by the count endpoint, which returns both.
+        totalMatchingFilters: [
+            (s) => [s.matchingCounts, s.filters],
+            (matchingCounts: { count: number; traceCount: number }, filters: TracingFilters): number =>
+                filters.viewMode === 'spans' ? matchingCounts.count : matchingCounts.traceCount,
         ],
         durationHistogramData: [
             (s) => [s.rawDurationHistogram],
             (rows: DurationHistogramRow[]): TracingDurationHistogramData => pivotDurationHistogram(rows, dataColorVars),
         ],
-        rootSpans: [
-            (s) => [s.spans],
-            (spans: Span[]): Span[] => {
-                return spans.filter((s) => s.is_root_span)
+        // The rows the list renders. 'traces' mode shows root spans only (one row per trace);
+        // 'spans' mode shows every matching span (root and child) flat. The fetch passes flatSpans
+        // to match, so in 'spans' mode the loaded spans are already the flat set.
+        listRows: [
+            (s) => [s.spans, s.filters],
+            (spans: Span[], filters: TracingFilters): Span[] => {
+                return filters.viewMode === 'spans' ? spans : spans.filter((s) => s.is_root_span)
             },
         ],
         // Memoized separately so visibleRowDurationRange (recomputed on every scroll tick) doesn't
-        // re-allocate the durations array — this only changes when the loaded spans do.
-        rootSpanDurations: [
-            (s) => [s.rootSpans],
-            (rootSpans: Span[]): number[] => rootSpans.map((span) => span.duration_nano),
+        // re-allocate the durations array — this only changes when the loaded rows do.
+        listRowDurations: [
+            (s) => [s.listRows],
+            (listRows: Span[]): number[] => listRows.map((span) => span.duration_nano),
         ],
         // Single owner of the "show the duration histogram?" rule — the fetch decision, the
         // highlight selector, and the scene's rendering all derive from this one place.
@@ -601,16 +637,16 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
         // duration space, so the histogram can sweep a highlight across the distribution as the
         // user scrolls (the same interaction the time sparkline has under timestamp sort).
         visibleRowDurationRange: [
-            (s) => [s.visibleRowRange, s.rootSpanDurations, s.isDurationMode],
+            (s) => [s.visibleRowRange, s.listRowDurations, s.isDurationMode],
             (
                 visibleRowRange: VisibleRowRange | null,
-                rootSpanDurations: number[],
+                listRowDurations: number[],
                 isDurationMode: boolean
             ): VisibleDurationRange | null => {
                 if (!isDurationMode) {
                     return null
                 }
-                return visibleDurationRange(visibleRowRange, rootSpanDurations)
+                return visibleDurationRange(visibleRowRange, listRowDurations)
             },
         ],
 
@@ -620,19 +656,19 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
         // contiguous in time, so the highlight would be meaningless. Suppress it then; the duration
         // histogram (visibleRowDurationRange above) covers the duration-sorted case.
         visibleRowDateRange: [
-            (s) => [s.visibleRowRange, s.rootSpans, s.orderBy],
+            (s) => [s.visibleRowRange, s.listRows, s.orderBy],
             (
                 visibleRowRange: VisibleRowRange | null,
-                rootSpans: Span[],
+                listRows: Span[],
                 orderBy: TracingOrderBy
             ): VisibleSpanTimeRange | null => {
-                if (orderBy !== 'timestamp' || !visibleRowRange || rootSpans.length === 0) {
+                if (orderBy !== 'timestamp' || !visibleRowRange || listRows.length === 0) {
                     return null
                 }
-                const startIndex = Math.max(0, Math.min(visibleRowRange.startIndex, rootSpans.length - 1))
-                const stopIndex = Math.max(0, Math.min(visibleRowRange.stopIndex, rootSpans.length - 1))
-                const a = rootSpans[startIndex]?.timestamp
-                const b = rootSpans[stopIndex]?.timestamp
+                const startIndex = Math.max(0, Math.min(visibleRowRange.startIndex, listRows.length - 1))
+                const stopIndex = Math.max(0, Math.min(visibleRowRange.stopIndex, listRows.length - 1))
+                const a = listRows[startIndex]?.timestamp
+                const b = listRows[stopIndex]?.timestamp
                 if (!a || !b) {
                     return null
                 }
@@ -650,10 +686,11 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
     listeners(({ actions, values }) => ({
         runQuery: () => {
             actions.clearSpans()
-            // The time sparkline is always fetched — it also feeds totalSpansMatchingFilters, and
-            // keeps the chart warm when the user flips back to timestamp sort. Duration sort
-            // additionally fetches the histogram that replaces it visually.
+            // The time sparkline is always fetched — it keeps the chart warm when the user flips back
+            // to timestamp sort. Duration sort additionally fetches the histogram that replaces it
+            // visually. The count endpoint feeds the "N traces/spans matching filters" label.
             actions.fetchSparkline()
+            actions.fetchMatchingCounts()
             if (values.isDurationMode) {
                 actions.fetchDurationHistogram()
             }
@@ -675,6 +712,12 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
             }
             actions.setSparklineAbortController(controller)
         },
+        cancelInProgressMatchingCounts: ({ controller }) => {
+            if (values.matchingCountsAbortController !== null) {
+                values.matchingCountsAbortController.abort(NEW_QUERY_STARTED_ERROR_MESSAGE)
+            }
+            actions.setMatchingCountsAbortController(controller)
+        },
         cancelInProgressDurationHistogram: ({ controller }) => {
             if (values.durationHistogramAbortController !== null) {
                 values.durationHistogramAbortController.abort(NEW_QUERY_STARTED_ERROR_MESSAGE)
@@ -694,7 +737,7 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
             actions.setSpanTreeAbortController(controller)
         },
         fetchSpansSuccess: () => {
-            captureTracingResults(values.rootSpans.length, 'spans')
+            captureTracingResults(values.listRows.length, 'spans')
         },
         fetchAggregationSuccess: ({ aggregation }) => {
             captureTracingResults(aggregation.current.length, 'aggregation')
@@ -729,6 +772,9 @@ export const tracingDataLogic = kea<tracingDataLogicType>([
             }
             if (values.sparklineAbortController) {
                 values.sparklineAbortController.abort('unmounting component')
+            }
+            if (values.matchingCountsAbortController) {
+                values.matchingCountsAbortController.abort('unmounting component')
             }
             if (values.durationHistogramAbortController) {
                 values.durationHistogramAbortController.abort('unmounting component')
