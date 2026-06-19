@@ -195,24 +195,13 @@ export const CustomPropertyDefinitionsCreateBody = /* @__PURE__ */ zod
             .max(customPropertyDefinitionsCreateBodyNameMax)
             .describe('Human-readable name of the custom property. Unique within the team.'),
         description: zod.string().nullish().describe('Optional description of what the property represents.'),
-        type: zod
-            .enum(['string', 'numeric', 'boolean', 'datetime'])
-            .describe('\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime')
+        display_type: zod
+            .enum(['text', 'number', 'currency', 'percent', 'date', 'datetime', 'boolean'])
             .describe(
-                "Value type: 'string', 'numeric', 'boolean', or 'datetime'.\n\n\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime"
-            ),
-        format: zod
-            .union([
-                zod
-                    .enum(['currency', 'decimal', 'YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss', 'percent_fraction', 'percent'])
-                    .describe(
-                        '\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent'
-                    ),
-                zod.null(),
-            ])
-            .optional()
+                '\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean'
+            )
             .describe(
-                "Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.\n\n\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent"
+                "How the property is interpreted and rendered: 'text', 'number', 'currency', 'percent', 'date', 'datetime', or 'boolean'.\n\n\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean"
             ),
         is_big_number: zod
             .boolean()
@@ -220,7 +209,7 @@ export const CustomPropertyDefinitionsCreateBody = /* @__PURE__ */ zod
             .describe('Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties.'),
     })
     .describe(
-        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, type, format, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
+        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, display type, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
     )
 
 export const customPropertyDefinitionsUpdateBodyNameMax = 400
@@ -234,24 +223,13 @@ export const CustomPropertyDefinitionsUpdateBody = /* @__PURE__ */ zod
             .max(customPropertyDefinitionsUpdateBodyNameMax)
             .describe('Human-readable name of the custom property. Unique within the team.'),
         description: zod.string().nullish().describe('Optional description of what the property represents.'),
-        type: zod
-            .enum(['string', 'numeric', 'boolean', 'datetime'])
-            .describe('\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime')
+        display_type: zod
+            .enum(['text', 'number', 'currency', 'percent', 'date', 'datetime', 'boolean'])
             .describe(
-                "Value type: 'string', 'numeric', 'boolean', or 'datetime'.\n\n\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime"
-            ),
-        format: zod
-            .union([
-                zod
-                    .enum(['currency', 'decimal', 'YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss', 'percent_fraction', 'percent'])
-                    .describe(
-                        '\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent'
-                    ),
-                zod.null(),
-            ])
-            .optional()
+                '\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean'
+            )
             .describe(
-                "Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.\n\n\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent"
+                "How the property is interpreted and rendered: 'text', 'number', 'currency', 'percent', 'date', 'datetime', or 'boolean'.\n\n\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean"
             ),
         is_big_number: zod
             .boolean()
@@ -259,7 +237,7 @@ export const CustomPropertyDefinitionsUpdateBody = /* @__PURE__ */ zod
             .describe('Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties.'),
     })
     .describe(
-        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, type, format, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
+        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, display type, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
     )
 
 export const customPropertyDefinitionsPartialUpdateBodyNameMax = 400
@@ -274,25 +252,14 @@ export const CustomPropertyDefinitionsPartialUpdateBody = /* @__PURE__ */ zod
             .optional()
             .describe('Human-readable name of the custom property. Unique within the team.'),
         description: zod.string().nullish().describe('Optional description of what the property represents.'),
-        type: zod
-            .enum(['string', 'numeric', 'boolean', 'datetime'])
-            .describe('\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime')
+        display_type: zod
+            .enum(['text', 'number', 'currency', 'percent', 'date', 'datetime', 'boolean'])
+            .describe(
+                '\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean'
+            )
             .optional()
             .describe(
-                "Value type: 'string', 'numeric', 'boolean', or 'datetime'.\n\n\* `string` - String\n\* `numeric` - Numeric\n\* `boolean` - Boolean\n\* `datetime` - DateTime"
-            ),
-        format: zod
-            .union([
-                zod
-                    .enum(['currency', 'decimal', 'YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss', 'percent_fraction', 'percent'])
-                    .describe(
-                        '\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent'
-                    ),
-                zod.null(),
-            ])
-            .optional()
-            .describe(
-                "Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.\n\n\* `currency` - Currency\n\* `decimal` - Decimal\n\* `YYYY-MM-DD` - YYYY-MM-DD\n\* `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss\n\* `percent_fraction` - Percent Fraction\n\* `percent` - Percent"
+                "How the property is interpreted and rendered: 'text', 'number', 'currency', 'percent', 'date', 'datetime', or 'boolean'.\n\n\* `text` - text\n\* `number` - number\n\* `currency` - currency\n\* `percent` - percent\n\* `date` - date\n\* `datetime` - datetime\n\* `boolean` - boolean"
             ),
         is_big_number: zod
             .boolean()
@@ -300,7 +267,7 @@ export const CustomPropertyDefinitionsPartialUpdateBody = /* @__PURE__ */ zod
             .describe('Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties.'),
     })
     .describe(
-        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, type, format, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
+        "A team-scoped definition of a custom account property — the attribute side of the model.\n\nHolds only the property's shape (name, display type, big-number flag). Per-account values are\nstored separately, so this serializer never reads or writes account values."
     )
 
 export const customerJourneysCreateBodyNameMax = 400

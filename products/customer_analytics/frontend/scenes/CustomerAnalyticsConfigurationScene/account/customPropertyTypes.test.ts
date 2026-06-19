@@ -1,44 +1,15 @@
-import {
-    CustomPropertyDisplayType,
-    DISPLAY_TYPE_OPTIONS,
-    displayTypeToModel,
-    labelForModel,
-    modelToDisplayType,
-} from './customPropertyTypes'
+import { DISPLAY_TYPE_OPTIONS, labelForDisplayType } from './customPropertyTypes'
 
 describe('customPropertyTypes', () => {
-    it.each(DISPLAY_TYPE_OPTIONS.map((option) => option.value))(
-        'round-trips the "%s" display type through the model and back',
-        (displayType) => {
-            const model = displayTypeToModel(displayType as CustomPropertyDisplayType, false)
-            expect(modelToDisplayType(model)).toBe(displayType)
-        }
-    )
-
-    it('preserves the big-number flag for numeric display types', () => {
-        expect(displayTypeToModel('number', true).is_big_number).toBe(true)
-        expect(displayTypeToModel('currency', true).is_big_number).toBe(true)
-        expect(displayTypeToModel('percent', true).is_big_number).toBe(true)
+    it('labels each display type with its option label', () => {
+        expect(labelForDisplayType('currency')).toBe('Currency')
+        expect(labelForDisplayType('datetime')).toBe('Date & time')
+        expect(labelForDisplayType('text')).toBe('Text')
+        expect(labelForDisplayType('boolean')).toBe('True / false')
     })
 
-    it('forces the big-number flag off for non-numeric display types', () => {
-        expect(displayTypeToModel('text', true).is_big_number).toBe(false)
-        expect(displayTypeToModel('date', true).is_big_number).toBe(false)
-        expect(displayTypeToModel('boolean', true).is_big_number).toBe(false)
-    })
-
-    it('never sets a format for text or boolean', () => {
-        expect(displayTypeToModel('text', false).format).toBeNull()
-        expect(displayTypeToModel('boolean', false).format).toBeNull()
-    })
-
-    it('maps percent_fraction onto the percent display type (not surfaced separately in v1)', () => {
-        expect(modelToDisplayType({ type: 'numeric', format: 'percent_fraction' })).toBe('percent')
-    })
-
-    it('labels a model with its display-type label', () => {
-        expect(labelForModel({ type: 'numeric', format: 'currency' })).toBe('Currency')
-        expect(labelForModel({ type: 'datetime', format: 'YYYY-MM-DD hh:mm:ss' })).toBe('Date & time')
-        expect(labelForModel({ type: 'string', format: null })).toBe('Text')
+    it('marks only numeric display types as numeric (drives the big-number switch)', () => {
+        const numeric = DISPLAY_TYPE_OPTIONS.filter((option) => option.isNumeric).map((option) => option.value)
+        expect(numeric).toEqual(['number', 'currency', 'percent'])
     })
 })

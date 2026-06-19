@@ -12,10 +12,13 @@ from posthog.exceptions import Conflict
 from posthog.models import OrganizationMembership
 
 from products.customer_analytics.backend.models import (
+    DATA_TYPE_BY_DISPLAY_TYPE,
     Account,
     CustomerJourney,
     CustomerProfileConfig,
     CustomPropertyDefinition,
+    DataType,
+    DisplayType,
 )
 from products.notebooks.backend.models import Notebook
 
@@ -319,7 +322,7 @@ class AccountNotebookSerializer(serializers.ModelSerializer):
 class CustomPropertyDefinitionSerializer(serializers.ModelSerializer):
     """A team-scoped definition of a custom account property — the attribute side of the model.
 
-    Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+    Holds only the property's shape (name, display type, big-number flag). Per-account values are
     stored separately, so this serializer never reads or writes account values.
     """
 
@@ -333,18 +336,11 @@ class CustomPropertyDefinitionSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Optional description of what the property represents.",
     )
-    type = serializers.ChoiceField(
-        choices=CustomPropertyDefinition.Type.choices,
-        help_text="Value type: 'string', 'numeric', 'boolean', or 'datetime'.",
-    )
-    format = serializers.ChoiceField(
-        choices=CustomPropertyDefinition.Format.choices,
-        required=False,
-        allow_null=True,
+    display_type = serializers.ChoiceField(
+        choices=[t.value for t in DisplayType],
         help_text=(
-            "Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', "
-            "'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; "
-            "must be empty for 'string' and 'boolean'."
+            "How the property is interpreted and rendered: 'text', 'number', 'currency', "
+            "'percent', 'date', 'datetime', or 'boolean'."
         ),
     )
     is_big_number = serializers.BooleanField(
@@ -359,8 +355,7 @@ class CustomPropertyDefinitionSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "description",
-            "type",
-            "format",
+            "display_type",
             "is_big_number",
             "created_at",
             "created_by",
@@ -368,45 +363,13 @@ class CustomPropertyDefinitionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "created_by", "updated_at"]
 
-    _NUMERIC_FORMATS = frozenset(
-        {
-            CustomPropertyDefinition.Format.Decimal,
-            CustomPropertyDefinition.Format.Currency,
-            CustomPropertyDefinition.Format.Percent,
-            CustomPropertyDefinition.Format.PercentFraction,
-        }
-    )
-    _DATETIME_FORMATS = frozenset(
-        {
-            CustomPropertyDefinition.Format.Date,
-            CustomPropertyDefinition.Format.DateTime,
-        }
-    )
-
     def validate(self, attrs):
-        type_ = attrs.get("type") or getattr(self.instance, "type", None)
-        format_ = attrs.get("format") if "format" in attrs else getattr(self.instance, "format", None)
+        display_type = attrs.get("display_type") or getattr(self.instance, "display_type", None)
         is_big_number = attrs.get("is_big_number")
         if is_big_number is None:
             is_big_number = getattr(self.instance, "is_big_number", False)
 
-        if type_ in (CustomPropertyDefinition.Type.String, CustomPropertyDefinition.Type.Boolean):
-            if format_:
-                raise serializers.ValidationError({"format": f"A '{type_}' property must not have a format."})
-        elif type_ == CustomPropertyDefinition.Type.Numeric:
-            if format_ not in self._NUMERIC_FORMATS:
-                raise serializers.ValidationError(
-                    {
-                        "format": "A numeric property requires a numeric format: decimal, currency, percent, or percent_fraction."
-                    }
-                )
-        elif type_ == CustomPropertyDefinition.Type.Datetime:
-            if format_ not in self._DATETIME_FORMATS:
-                raise serializers.ValidationError(
-                    {"format": "A datetime property requires a date or date-time format."}
-                )
-
-        if type_ != CustomPropertyDefinition.Type.Numeric and is_big_number:
+        if display_type and is_big_number and DATA_TYPE_BY_DISPLAY_TYPE[DisplayType(display_type)] != DataType.NUMERIC:
             attrs["is_big_number"] = False
 
         return attrs

@@ -1498,7 +1498,7 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
         self.endpoint_base = f"/api/environments/{self.team.id}/custom_property_definitions/"
 
     def _create(self, **overrides):
-        payload = {"name": "ARR", "type": "numeric", "format": "currency", "is_big_number": True}
+        payload = {"name": "ARR", "display_type": "currency", "is_big_number": True}
         payload.update(overrides)
         return self.client.post(self.endpoint_base, payload, format="json")
 
@@ -1508,8 +1508,7 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
         self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
         data = response.json()
         self.assertEqual(data["name"], "ARR")
-        self.assertEqual(data["type"], "numeric")
-        self.assertEqual(data["format"], "currency")
+        self.assertEqual(data["display_type"], "currency")
         self.assertTrue(data["is_big_number"])
         self.assertIn("id", data)
         self.assertIn("created_at", data)
@@ -1519,46 +1518,30 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
         self.assertEqual(definition.team, self.team)
         self.assertEqual(definition.created_by, self.user)
 
-    def test_create_string_property_without_format(self):
-        response = self._create(name="Tier", type="string", format=None, is_big_number=False)
+    def test_create_text_property(self):
+        response = self._create(name="Tier", display_type="text", is_big_number=False)
 
         self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
-        self.assertIsNone(response.json()["format"])
+        self.assertEqual(response.json()["display_type"], "text")
 
     @parameterized.expand(
         [
-            ("string_ok", {"name": "P", "type": "string"}, status.HTTP_201_CREATED),
-            ("string_with_format", {"name": "P", "type": "string", "format": "currency"}, status.HTTP_400_BAD_REQUEST),
-            ("boolean_ok", {"name": "P", "type": "boolean"}, status.HTTP_201_CREATED),
-            ("boolean_with_format", {"name": "P", "type": "boolean", "format": "decimal"}, status.HTTP_400_BAD_REQUEST),
-            ("numeric_decimal", {"name": "P", "type": "numeric", "format": "decimal"}, status.HTTP_201_CREATED),
-            ("numeric_currency", {"name": "P", "type": "numeric", "format": "currency"}, status.HTTP_201_CREATED),
-            ("numeric_percent", {"name": "P", "type": "numeric", "format": "percent"}, status.HTTP_201_CREATED),
-            ("numeric_no_format", {"name": "P", "type": "numeric"}, status.HTTP_400_BAD_REQUEST),
-            (
-                "numeric_date_format",
-                {"name": "P", "type": "numeric", "format": "YYYY-MM-DD"},
-                status.HTTP_400_BAD_REQUEST,
-            ),
-            ("datetime_date", {"name": "P", "type": "datetime", "format": "YYYY-MM-DD"}, status.HTTP_201_CREATED),
-            (
-                "datetime_datetime",
-                {"name": "P", "type": "datetime", "format": "YYYY-MM-DD hh:mm:ss"},
-                status.HTTP_201_CREATED,
-            ),
-            (
-                "datetime_currency",
-                {"name": "P", "type": "datetime", "format": "currency"},
-                status.HTTP_400_BAD_REQUEST,
-            ),
+            ("text", "text", status.HTTP_201_CREATED),
+            ("number", "number", status.HTTP_201_CREATED),
+            ("currency", "currency", status.HTTP_201_CREATED),
+            ("percent", "percent", status.HTTP_201_CREATED),
+            ("date", "date", status.HTTP_201_CREATED),
+            ("datetime", "datetime", status.HTTP_201_CREATED),
+            ("boolean", "boolean", status.HTTP_201_CREATED),
+            ("unknown_rejected", "frobnicate", status.HTTP_400_BAD_REQUEST),
         ]
     )
-    def test_type_format_validation(self, _name, payload, expected_status):
-        response = self.client.post(self.endpoint_base, payload, format="json")
+    def test_display_type_validation(self, _name, display_type, expected_status):
+        response = self.client.post(self.endpoint_base, {"name": "P", "display_type": display_type}, format="json")
         self.assertEqual(expected_status, response.status_code, response.json())
 
     def test_is_big_number_forced_false_for_non_numeric(self):
-        response = self._create(name="Tier", type="string", format=None, is_big_number=True)
+        response = self._create(name="Tier", display_type="text", is_big_number=True)
 
         self.assertEqual(status.HTTP_201_CREATED, response.status_code, response.json())
         self.assertFalse(response.json()["is_big_number"])
@@ -1571,11 +1554,11 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
         self.assertEqual(status.HTTP_409_CONFLICT, response.status_code, response.json())
 
     def test_list_returns_only_current_team_ordered_by_name(self):
-        self._create(name="Beta", type="string", format=None)
-        self._create(name="Alpha", type="string", format=None)
+        self._create(name="Beta", display_type="text")
+        self._create(name="Alpha", display_type="text")
         other_team = Team.objects.create(organization=self.organization)
         # nosemgrep: idor-lookup-without-team (test setup for another team)
-        CustomPropertyDefinition.objects.unscoped().create(team=other_team, name="Gamma", type="string")
+        CustomPropertyDefinition.objects.unscoped().create(team=other_team, name="Gamma", display_type="text")
 
         response = self.client.get(self.endpoint_base)
 
@@ -1598,22 +1581,29 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
 
         self.assertEqual(status.HTTP_409_CONFLICT, response.status_code, response.json())
 
-    def test_type_is_editable(self):
-        created = self._create(name="Field", type="string", format=None).json()
+    def test_display_type_is_editable(self):
+        created = self._create(name="Field", display_type="text").json()
 
         response = self.client.patch(
             f"{self.endpoint_base}{created['id']}/",
-            {"name": "Field", "type": "numeric", "format": "decimal", "is_big_number": False},
+            {"name": "Field", "display_type": "number", "is_big_number": False},
             format="json",
         )
 
         self.assertEqual(status.HTTP_200_OK, response.status_code, response.json())
-        self.assertEqual(response.json()["type"], "numeric")
-        self.assertEqual(response.json()["format"], "decimal")
+        self.assertEqual(response.json()["display_type"], "number")
+
+    def test_patch_display_type_without_other_fields(self):
+        created = self._create(name="Field", display_type="currency").json()
+
+        response = self.client.patch(f"{self.endpoint_base}{created['id']}/", {"display_type": "text"}, format="json")
+
+        self.assertEqual(status.HTTP_200_OK, response.status_code, response.json())
+        self.assertEqual(response.json()["display_type"], "text")
 
     def test_delete_removes_definition_only(self):
-        keep = self._create(name="Keep", type="string", format=None).json()
-        remove = self._create(name="Remove", type="string", format=None).json()
+        keep = self._create(name="Keep", display_type="text").json()
+        remove = self._create(name="Remove", display_type="text").json()
 
         response = self.client.delete(f"{self.endpoint_base}{remove['id']}/")
 
@@ -1626,7 +1616,9 @@ class TestCustomPropertyDefinitionViewSet(APIBaseTest):
     def test_cannot_access_other_teams_definition(self):
         other_team = Team.objects.create(organization=self.organization)
         # nosemgrep: idor-lookup-without-team (test setup for another team)
-        other_def = CustomPropertyDefinition.objects.unscoped().create(team=other_team, name="Other", type="string")
+        other_def = CustomPropertyDefinition.objects.unscoped().create(
+            team=other_team, name="Other", display_type="text"
+        )
 
         response = self.client.get(f"{self.endpoint_base}{other_def.id}/")
 

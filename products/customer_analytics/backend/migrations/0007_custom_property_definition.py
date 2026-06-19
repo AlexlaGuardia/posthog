@@ -32,32 +32,19 @@ class Migration(migrations.Migration):
                 ("name", models.CharField(max_length=400)),
                 ("description", models.TextField(null=True)),
                 (
-                    "type",
+                    "display_type",
                     models.CharField(
                         choices=[
-                            ("string", "String"),
-                            ("numeric", "Numeric"),
-                            ("boolean", "Boolean"),
-                            ("datetime", "DateTime"),
+                            ("text", "text"),
+                            ("number", "number"),
+                            ("currency", "currency"),
+                            ("percent", "percent"),
+                            ("date", "date"),
+                            ("datetime", "datetime"),
+                            ("boolean", "boolean"),
                         ],
-                        default="string",
+                        default="text",
                         max_length=20,
-                    ),
-                ),
-                (
-                    "format",
-                    models.CharField(
-                        choices=[
-                            ("currency", "Currency"),
-                            ("decimal", "Decimal"),
-                            ("YYYY-MM-DD", "YYYY-MM-DD"),
-                            ("YYYY-MM-DD hh:mm:ss", "YYYY-MM-DD hh:mm:ss"),
-                            ("percent_fraction", "Percent Fraction"),
-                            ("percent", "Percent"),
-                        ],
-                        default=None,
-                        max_length=32,
-                        null=True,
                     ),
                 ),
                 (

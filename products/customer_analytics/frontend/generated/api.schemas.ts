@@ -239,45 +239,31 @@ export interface PatchedAccountApi {
 }
 
 /**
- * * `string` - String
- * * `numeric` - Numeric
- * * `boolean` - Boolean
- * * `datetime` - DateTime
+ * * `text` - text
+ * * `number` - number
+ * * `currency` - currency
+ * * `percent` - percent
+ * * `date` - date
+ * * `datetime` - datetime
+ * * `boolean` - boolean
  */
-export type CustomPropertyDefinitionTypeEnumApi =
-    (typeof CustomPropertyDefinitionTypeEnumApi)[keyof typeof CustomPropertyDefinitionTypeEnumApi]
+export type CustomPropertyDisplayTypeEnumApi =
+    (typeof CustomPropertyDisplayTypeEnumApi)[keyof typeof CustomPropertyDisplayTypeEnumApi]
 
-export const CustomPropertyDefinitionTypeEnumApi = {
-    String: 'string',
-    Numeric: 'numeric',
-    Boolean: 'boolean',
-    Datetime: 'datetime',
-} as const
-
-/**
- * * `currency` - Currency
- * * `decimal` - Decimal
- * * `YYYY-MM-DD` - YYYY-MM-DD
- * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
- * * `percent_fraction` - Percent Fraction
- * * `percent` - Percent
- */
-export type CustomPropertyDefinitionFormatEnumApi =
-    (typeof CustomPropertyDefinitionFormatEnumApi)[keyof typeof CustomPropertyDefinitionFormatEnumApi]
-
-export const CustomPropertyDefinitionFormatEnumApi = {
+export const CustomPropertyDisplayTypeEnumApi = {
+    Text: 'text',
+    Number: 'number',
     Currency: 'currency',
-    Decimal: 'decimal',
-    YyyyMmDd: 'YYYY-MM-DD',
-    YYYYMMDDHhMmSs: 'YYYY-MM-DD hh:mm:ss',
-    PercentFraction: 'percent_fraction',
     Percent: 'percent',
+    Date: 'date',
+    Datetime: 'datetime',
+    Boolean: 'boolean',
 } as const
 
 /**
  * A team-scoped definition of a custom account property — the attribute side of the model.
  *
- * Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+ * Holds only the property's shape (name, display type, big-number flag). Per-account values are
  * stored separately, so this serializer never reads or writes account values.
  */
 export interface CustomPropertyDefinitionApi {
@@ -292,22 +278,16 @@ export interface CustomPropertyDefinitionApi {
      * @nullable
      */
     description?: string | null
-    /** Value type: 'string', 'numeric', 'boolean', or 'datetime'.
+    /** How the property is interpreted and rendered: 'text', 'number', 'currency', 'percent', 'date', 'datetime', or 'boolean'.
      *
-     * * `string` - String
-     * * `numeric` - Numeric
-     * * `boolean` - Boolean
-     * * `datetime` - DateTime */
-    type: CustomPropertyDefinitionTypeEnumApi
-    /** Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.
-     *
-     * * `currency` - Currency
-     * * `decimal` - Decimal
-     * * `YYYY-MM-DD` - YYYY-MM-DD
-     * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
-     * * `percent_fraction` - Percent Fraction
-     * * `percent` - Percent */
-    format?: CustomPropertyDefinitionFormatEnumApi | null
+     * * `text` - text
+     * * `number` - number
+     * * `currency` - currency
+     * * `percent` - percent
+     * * `date` - date
+     * * `datetime` - datetime
+     * * `boolean` - boolean */
+    display_type: CustomPropertyDisplayTypeEnumApi
     /** Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties. */
     is_big_number?: boolean
     readonly created_at: string
@@ -329,7 +309,7 @@ export interface PaginatedCustomPropertyDefinitionListApi {
 /**
  * A team-scoped definition of a custom account property — the attribute side of the model.
  *
- * Holds only the property's shape (name, type, format, big-number flag). Per-account values are
+ * Holds only the property's shape (name, display type, big-number flag). Per-account values are
  * stored separately, so this serializer never reads or writes account values.
  */
 export interface PatchedCustomPropertyDefinitionApi {
@@ -344,22 +324,16 @@ export interface PatchedCustomPropertyDefinitionApi {
      * @nullable
      */
     description?: string | null
-    /** Value type: 'string', 'numeric', 'boolean', or 'datetime'.
+    /** How the property is interpreted and rendered: 'text', 'number', 'currency', 'percent', 'date', 'datetime', or 'boolean'.
      *
-     * * `string` - String
-     * * `numeric` - Numeric
-     * * `boolean` - Boolean
-     * * `datetime` - DateTime */
-    type?: CustomPropertyDefinitionTypeEnumApi
-    /** Presentation format. Required for 'numeric' ('decimal', 'currency', 'percent', 'percent_fraction') and 'datetime' ('YYYY-MM-DD', 'YYYY-MM-DD hh:mm:ss') types; must be empty for 'string' and 'boolean'.
-     *
-     * * `currency` - Currency
-     * * `decimal` - Decimal
-     * * `YYYY-MM-DD` - YYYY-MM-DD
-     * * `YYYY-MM-DD hh:mm:ss` - YYYY-MM-DD hh:mm:ss
-     * * `percent_fraction` - Percent Fraction
-     * * `percent` - Percent */
-    format?: CustomPropertyDefinitionFormatEnumApi | null
+     * * `text` - text
+     * * `number` - number
+     * * `currency` - currency
+     * * `percent` - percent
+     * * `date` - date
+     * * `datetime` - datetime
+     * * `boolean` - boolean */
+    display_type?: CustomPropertyDisplayTypeEnumApi
     /** Abbreviate large numbers (e.g. 10,000 → 10K). Only applies to numeric properties. */
     is_big_number?: boolean
     readonly created_at?: string

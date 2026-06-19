@@ -12,7 +12,7 @@ import type { CustomPropertyDefinitionApi } from 'products/customer_analytics/fr
 
 import { customPropertyDefinitionsLogic } from './customPropertyDefinitionsLogic'
 import { CustomPropertyModal } from './CustomPropertyModal'
-import { labelForModel } from './customPropertyTypes'
+import { labelForDisplayType } from './customPropertyTypes'
 
 export function CustomPropertiesConfig(): JSX.Element {
     const { definitions, definitionsLoading } = useValues(customPropertyDefinitionsLogic)
@@ -43,7 +43,7 @@ export function CustomPropertiesConfig(): JSX.Element {
         },
         {
             title: 'Type',
-            render: (_, definition) => labelForModel(definition),
+            render: (_, definition) => labelForDisplayType(definition.display_type),
         },
         {
             title: 'Description',

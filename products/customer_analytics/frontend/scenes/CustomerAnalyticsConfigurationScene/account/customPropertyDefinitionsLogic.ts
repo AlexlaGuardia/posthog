@@ -12,15 +12,17 @@ import {
     customPropertyDefinitionsList,
     customPropertyDefinitionsPartialUpdate,
 } from 'products/customer_analytics/frontend/generated/api'
-import type { CustomPropertyDefinitionApi } from 'products/customer_analytics/frontend/generated/api.schemas'
+import type {
+    CustomPropertyDefinitionApi,
+    CustomPropertyDisplayTypeEnumApi,
+} from 'products/customer_analytics/frontend/generated/api.schemas'
 
 import type { customPropertyDefinitionsLogicType } from './customPropertyDefinitionsLogicType'
-import { CustomPropertyDisplayType, displayTypeToModel, modelToDisplayType } from './customPropertyTypes'
 
 export interface CustomPropertyFormValues {
     name: string
     description: string
-    displayType: CustomPropertyDisplayType
+    displayType: CustomPropertyDisplayTypeEnumApi
     isBigNumber: boolean
 }
 
@@ -89,13 +91,11 @@ export const customPropertyDefinitionsLogic = kea<customPropertyDefinitionsLogic
                 name: !name?.trim() ? 'Name is required' : undefined,
             }),
             submit: async ({ name, description, displayType, isBigNumber }: CustomPropertyFormValues) => {
-                const { type, format, is_big_number } = displayTypeToModel(displayType, isBigNumber)
                 const body = {
                     name: name.trim(),
                     description: description?.trim() || null,
-                    type,
-                    format,
-                    is_big_number,
+                    display_type: displayType,
+                    is_big_number: isBigNumber,
                 }
                 const editing = values.editingDefinition
                 if (editing) {
@@ -114,7 +114,7 @@ export const customPropertyDefinitionsLogic = kea<customPropertyDefinitionsLogic
             actions.setCustomPropertyFormValues({
                 name: definition.name,
                 description: definition.description ?? '',
-                displayType: modelToDisplayType(definition),
+                displayType: definition.display_type,
                 isBigNumber: definition.is_big_number ?? false,
             })
         },
