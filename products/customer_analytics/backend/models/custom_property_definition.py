@@ -23,8 +23,8 @@ class CustomPropertyDefinition(TeamScopedRootMixin, UUIDModel, CreatedMetaFields
 
     name = models.CharField(max_length=400)
     description = models.TextField(null=True)
-    type = models.CharField(choices=Type, default=Type.String)
-    format = models.CharField(choices=Format, default=None, null=True)
+    type = models.CharField(choices=Type, default=Type.String, max_length=20)
+    format = models.CharField(choices=Format, default=None, null=True, max_length=32)
     is_big_number = models.BooleanField(
         default=False, help_text="Whether the property is a big number and should be abbreviated. E.g.: 10,000 -> 10K"
     )

@@ -41,6 +41,7 @@ class Migration(migrations.Migration):
                             ("datetime", "DateTime"),
                         ],
                         default="string",
+                        max_length=20,
                     ),
                 ),
                 (
@@ -55,6 +56,7 @@ class Migration(migrations.Migration):
                             ("percent", "Percent"),
                         ],
                         default=None,
+                        max_length=32,
                         null=True,
                     ),
                 ),
