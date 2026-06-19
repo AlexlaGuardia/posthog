@@ -10,6 +10,7 @@ from psycopg.types.datetime import DateLoader
 from pymysql.constants import FIELD_TYPE as MYSQL_FIELD_TYPE
 from sqlparse import tokens as sqlparse_tokens
 from sqlparse.sql import Statement
+import snowflake.connector
 
 from posthog.schema import (
     HogLanguage,
@@ -31,6 +32,7 @@ from posthog.hogql.constants import (
 from posthog.hogql.database.database import Database
 from posthog.hogql.database.direct_mysql_table import DirectMySQLTable
 from posthog.hogql.database.direct_postgres_table import DirectPostgresTable
+from posthog.hogql.database.direct_snowflake_table import DirectSnowflakeTable
 from posthog.hogql.database.schema.duckdb_table_functions import (
     GenerateSeriesTable,
     OpaqueFunctionCallTable,
@@ -42,6 +44,7 @@ from posthog.hogql.direct_connection import (
     get_direct_connection_source_none_or_raise,
     validate_direct_mysql_source_config,
     validate_direct_postgres_source_config,
+    validate_direct_snowflake_source_config,
 )
 from posthog.hogql.errors import ExposedHogQLError, QueryError, ResolutionError
 from posthog.hogql.escape_sql import escape_postgres_identifier
@@ -74,6 +77,7 @@ tracer = trace.get_tracer(__name__)
 DIRECT_POSTGRES_CONNECT_TIMEOUT_SECONDS = 15
 DIRECT_POSTGRES_DEFAULT_STATEMENT_TIMEOUT_SECONDS = 600
 DIRECT_MYSQL_DEFAULT_STATEMENT_TIMEOUT_SECONDS = 600
+DIRECT_SNOWFLAKE_DEFAULT_STATEMENT_TIMEOUT_SECONDS = 600
 RAW_MYSQL_READ_ONLY_ERROR = "Raw MySQL queries must be read-only SELECT statements."
 
 POSTGRES_OID_TO_CLICKHOUSE_TYPE: dict[int, str] = {
@@ -145,6 +149,25 @@ MYSQL_FIELD_TYPE_TO_CLICKHOUSE_TYPE: dict[int, str] = {
     MYSQL_FIELD_TYPE.GEOMETRY: "String",
 }
 
+SNOWFLAKE_FIELD_TYPE_TO_CLICKHOUSE_TYPE: dict[str, str] = {
+    "BOOLEAN": "Bool",
+    "NUMBER": "Decimal",
+    "FLOAT": "Float64",
+    "INT": "Int64",
+    "BIGINT": "Int64",
+    "SMALLINT": "Int16",
+    "TINYINT": "Int8",
+    "BYTEINT": "Int8",
+    "TEXT": "String",
+    "VARCHAR": "String",
+    "CHAR": "String",
+    "STRING": "String",
+    "DATE": "Date",
+    "TIMESTAMP_NTZ": "DateTime64(6, 'UTC')",
+    "TIMESTAMP_LTZ": "DateTime64(6, 'UTC')",
+    "TIMESTAMP_TZ": "DateTime64(6, 'UTC')",
+}
+
 
 def mysql_field_type_to_clickhouse_type(type_code: int | None) -> str:
     if type_code is None:
@@ -161,6 +184,23 @@ def mysql_error_to_message(error: Exception) -> str:
     message = str(error).strip()
     if not message:
         return "MySQL query failed."
+    return message.splitlines()[0]
+
+
+def snowflake_field_type_to_clickhouse_type(type_code: str | None) -> str:
+    if type_code is None:
+        return "String"
+    return SNOWFLAKE_FIELD_TYPE_TO_CLICKHOUSE_TYPE.get(type_code.upper(), "String")
+
+
+def snowflake_error_to_message(error: Exception) -> str:
+    if isinstance(error, snowflake.connector.errors.Error):
+        args = error.args
+        if len(args) >= 2 and isinstance(args[1], str) and args[1].strip():
+            return args[1].strip().splitlines()[0]
+    message = str(error).strip()
+    if not message:
+        return "Snowflake query failed."
     return message.splitlines()[0]
 
 
@@ -208,7 +248,7 @@ def ensure_single_direct_statement(sql: str) -> str:
     protocol, which runs every ``;``-separated statement in one round trip. A
     caller could commit out of the read-only transaction and ``BEGIN READ WRITE``
     to perform writes; restricting to one statement keeps it read-only. The same
-    guard protects direct MySQL queries (PyMySQL additionally disables the
+    guard protects direct MySQL and Snowflake queries (PyMySQL additionally disables the
     MULTI_STATEMENTS client flag by default).
     """
     statements = [statement for statement in sqlparse.split(sql) if statement.strip(" \t\r\n;")]
@@ -612,7 +652,7 @@ class HogQLQueryExecutor:
         direct_source_ids = {
             table_type.table.external_data_source_id
             for table_type in base_table_types
-            if isinstance(table_type.table, (DirectPostgresTable, DirectMySQLTable))
+            if isinstance(table_type.table, (DirectPostgresTable, DirectMySQLTable, DirectSnowflakeTable))
         }
 
         direct_source_id: str | None = None
@@ -630,7 +670,8 @@ class HogQLQueryExecutor:
             raise ExposedHogQLError("Direct queries can only reference a single source.")
 
         has_non_direct_tables = any(
-            not isinstance(table_type.table, (DirectPostgresTable, DirectMySQLTable)) for table_type in base_table_types
+            not isinstance(table_type.table, (DirectPostgresTable, DirectMySQLTable, DirectSnowflakeTable))
+            for table_type in base_table_types
         )
         if has_non_direct_tables:
             if self.connection_id is None:
@@ -647,8 +688,12 @@ class HogQLQueryExecutor:
             raise ExposedHogQLError("The query references a different source than the selected connection.")
 
         source = getattr(self, "_direct_source", None)
-        dialect: Literal["postgres", "mysql"] = "mysql" if source is not None and source.is_direct_mysql else "postgres"
-        engine: Literal["direct_postgres", "direct_mysql"] = "direct_mysql" if dialect == "mysql" else "direct_postgres"
+        dialect: Literal["postgres", "mysql", "snowflake"] = (
+            "mysql" if source is not None and source.is_direct_mysql else "postgres"
+        )
+        engine: Literal["direct_postgres", "direct_mysql", "direct_snowflake"] = (
+            "direct_mysql" if dialect == "mysql" else "direct_postgres"
+        )
 
         direct_context = dataclasses.replace(
             self.context,
@@ -829,6 +874,50 @@ class HogQLQueryExecutor:
         span.set_attribute("row_count", len(results))
         self.results = list(results)
         self.types = [(column[0], mysql_field_type_to_clickhouse_type(column[1])) for column in description]
+        if not self.print_columns:
+            self.print_columns = [column[0] for column in description]
+
+    @tracer.start_as_current_span("HogqlQueryExecutor._execute_direct_snowflake_query")
+    def _execute_direct_snowflake_query(self) -> None:
+        assert self.direct_sql is not None
+        assert self.direct_source_id is not None
+
+        source = get_direct_connection_source(self.team, self.direct_source_id, user=self.user)
+        if source is None:
+            raise ExposedHogQLError("Connection not found or has been deleted")
+
+        snowflake_implementation, source_config = validate_direct_snowflake_source_config(source, self.team)
+        settings = self._effective_direct_settings()
+        statement_timeout_seconds = max(
+            settings.max_execution_time or DIRECT_SNOWFLAKE_DEFAULT_STATEMENT_TIMEOUT_SECONDS, 1
+        )
+
+        span = trace.get_current_span()
+        span.set_attribute("team_id", self.team.pk)
+        span.set_attribute("query_type", self.query_type)
+        span.set_attribute("source_id", self.direct_source_id)
+
+        try:
+            with self.timings.measure("snowflake_execute"):
+                with snowflake_implementation.connect(
+                    source_config, read_timeout=statement_timeout_seconds
+                ) as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(self.direct_sql, self.direct_values or None)
+                        results = cursor.fetchall()
+                        description = cursor.description or []
+        except (snowflake.connector.errors.Error, ExposedHogQLError) as error:
+            span.set_attribute("error_type", error.__class__.__name__)
+            if self.debug:
+                self.results = []
+                self.error = snowflake_error_to_message(error)
+                self.types = []
+                return
+            raise ExposedHogQLError(snowflake_error_to_message(error)) from error
+
+        span.set_attribute("row_count", len(results))
+        self.results = list(results)
+        self.types = [(column[0], snowflake_field_type_to_clickhouse_type(column[1])) for column in description]
         if not self.print_columns:
             self.print_columns = [column[0] for column in description]
 
