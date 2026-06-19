@@ -223,6 +223,7 @@ async def fetch_evaluation_activity(inputs: RunEvaluationInputs) -> dict[str, An
             return {
                 "id": str(evaluation.id),
                 "name": evaluation.name,
+                "enabled": evaluation.enabled,
                 "evaluation_type": evaluation.evaluation_type,
                 "evaluation_config": evaluation.evaluation_config,
                 "output_type": evaluation.output_type,
@@ -577,7 +578,36 @@ def _execute_llm_judge_activity(inputs: ExecuteLLMJudgeInputs) -> LLMJudgeResult
         # by the metrics interceptor; there is no error to record here.
         return _build_errored_trace_result(allows_na)
 
-    # Fetch provider key configuration (BYOK or trial)
+    # Extract input/output based on event type
+    input_raw, output_raw = extract_event_io(event_type, properties)
+    tools_raw = extract_event_tools(properties)
+
+    # Extract readable text from message structures
+    input_data = extract_text_from_messages(input_raw)
+    output_data = extract_text_from_messages(output_raw)
+    tools_data = format_tool_definitions(tools_raw)
+
+    system_prompt = build_system_prompt(prompt, allows_na)
+
+    # Insert a `Tools available:` section between Input and Output when the
+    # event captured the tool catalog. The judge needs to see what the agent
+    # *could* call to evaluate prompts like "did it pick the right tool?".
+    sections = [f"Input: {input_data}"]
+    if tools_data:
+        sections.append(f"Tools available:\n{tools_data}")
+    sections.append(f"Output: {output_data}")
+    user_prompt = "\n\n".join(sections)
+
+    return call_llm_judge(
+        evaluation=evaluation,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        allows_na=allows_na,
+    )
+
+
+def resolve_judge_provider(evaluation: dict[str, Any]) -> tuple[str, str, LLMProviderKey | None]:
+    """Resolve (provider, model, provider_key) for an LLM judge run, enforcing BYOK and trial gates."""
     team_id = evaluation["team_id"]
     model_configuration = evaluation.get("model_configuration")
 
@@ -664,31 +694,29 @@ def _execute_llm_judge_activity(inputs: ExecuteLLMJudgeInputs) -> LLMJudgeResult
         model = DEFAULT_JUDGE_MODEL
         provider_key = _get_legacy_provider_key()
 
+    return provider, model, provider_key
+
+
+def call_llm_judge(
+    *,
+    evaluation: dict[str, Any],
+    system_prompt: str,
+    user_prompt: str,
+    allows_na: bool,
+) -> LLMJudgeResult:
+    """Resolve the judge model/key for `evaluation` and run a single judge completion.
+
+    Shared by the single-event and trace-level judge activities — everything from provider
+    resolution through error mapping and result shaping is identical between them; only how
+    the user prompt is assembled differs.
+    """
+    provider, model, provider_key = resolve_judge_provider(evaluation)
+
     is_byok = provider_key is not None
     key_id = str(provider_key.id) if provider_key else None
 
-    # Extract input/output based on event type
-    input_raw, output_raw = extract_event_io(event_type, properties)
-    tools_raw = extract_event_tools(properties)
-
-    # Extract readable text from message structures
-    input_data = extract_text_from_messages(input_raw)
-    output_data = extract_text_from_messages(output_raw)
-    tools_data = format_tool_definitions(tools_raw)
-
-    # Build judge prompt based on allows_na config
     type_config = get_output_type_config(allows_na)
-    system_prompt = build_system_prompt(prompt, allows_na)
     response_format = type_config.response_format
-
-    # Insert a `Tools available:` section between Input and Output when the
-    # event captured the tool catalog. The judge needs to see what the agent
-    # *could* call to evaluate prompts like "did it pick the right tool?".
-    sections = [f"Input: {input_data}"]
-    if tools_data:
-        sections.append(f"Tools available:\n{tools_data}")
-    sections.append(f"Output: {output_data}")
-    user_prompt = "\n\n".join(sections)
 
     # Get eval-specific config when using PostHog defaults (no provider_key)
     config = get_eval_config(provider) if provider_key is None else None
@@ -877,10 +905,8 @@ def run_hog_eval(bytecode: list, event_data: dict[str, Any], allows_na: bool = F
     event_type = event_data["event"]
     input_raw, output_raw = extract_event_io(event_type, properties)
 
-    # Ensure input/output are always strings so string operations (ilike, length, etc.) work consistently.
-    # Users can still parse structured data with jsonParse() when needed.
-    input_val = json.dumps(input_raw) if isinstance(input_raw, (list, dict)) else (input_raw or "")
-    output_val = json.dumps(output_raw) if isinstance(output_raw, (list, dict)) else (output_raw or "")
+    input_val = coerce_hog_io_value(input_raw)
+    output_val = coerce_hog_io_value(output_raw)
 
     globals_dict: dict[str, Any] = {
         "input": input_val,
@@ -893,6 +919,25 @@ def run_hog_eval(bytecode: list, event_data: dict[str, Any], allows_na: bool = F
         },
     }
 
+    return execute_hog_eval_bytecode(bytecode, globals_dict, allows_na=allows_na)
+
+
+def coerce_hog_io_value(value: Any) -> str:
+    """Coerce an extracted input/output value into a string for Hog globals.
+
+    String operations (ilike, length, etc.) should work consistently; users can still
+    parse structured data with jsonParse() when needed.
+    """
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
+    return value or ""
+
+
+def execute_hog_eval_bytecode(bytecode: list, globals_dict: dict[str, Any], allows_na: bool) -> dict[str, Any]:
+    """Run compiled Hog eval bytecode against pre-built globals and shape the verdict.
+
+    Shared by the single-event and trace-level Hog activities — only the globals differ.
+    """
     try:
         response = execute_bytecode(
             bytecode,
@@ -974,6 +1019,56 @@ async def execute_hog_eval_activity(evaluation: dict[str, Any], event_data: dict
     return activity_result
 
 
+def build_evaluation_event_properties(
+    evaluation: dict[str, Any], result: LLMJudgeResult, start_time: datetime
+) -> dict[str, Any]:
+    """Assemble the target-independent `$ai_evaluation` properties shared by all emit paths.
+
+    Callers add the target linkage on top ($ai_target_id/$ai_target_type and friends) —
+    generation evals point at the source event UUID, trace evals at the trace id.
+    """
+    allows_na = result.get("allows_na", False)
+    evaluation_type = evaluation.get("evaluation_type", "llm_judge")
+
+    properties: dict[str, Any] = {
+        "$ai_evaluation_id": evaluation["id"],
+        "$ai_evaluation_name": evaluation["name"],
+        "$ai_evaluation_type": "online",
+        "$ai_evaluation_runtime": evaluation_type,
+        "$ai_evaluation_start_time": start_time.isoformat(),
+        "$ai_evaluation_allows_na": allows_na,
+        "$ai_evaluation_reasoning": result["reasoning"],
+    }
+
+    if result.get("skipped"):
+        properties["$ai_evaluation_skipped"] = True
+        properties["$ai_evaluation_skip_reason"] = result.get("skip_reason")
+
+    # LLM-specific properties: cost attribution and model info (not applicable for hog evals,
+    # and skipped evaluations never made an API call so attributing them to a model would
+    # pollute cost dashboards with phantom calls).
+    if evaluation_type != "hog" and not result.get("skipped"):
+        properties["$ai_model"] = result.get("model", DEFAULT_JUDGE_MODEL)
+        properties["$ai_provider"] = result.get("provider", "openai")
+        properties["$ai_input_tokens"] = result.get("input_tokens", 0)
+        properties["$ai_output_tokens"] = result.get("output_tokens", 0)
+        properties["$ai_evaluation_model"] = result.get("model", DEFAULT_JUDGE_MODEL)
+        properties["$ai_evaluation_provider"] = result.get("provider", "openai")
+        properties["$ai_evaluation_key_type"] = "byok" if result.get("is_byok") else "posthog"
+        properties["$ai_evaluation_key_id"] = result.get("key_id")
+
+    # Handle result based on allows_na config
+    if allows_na:
+        applicable = result.get("applicable", True)
+        properties["$ai_evaluation_applicable"] = applicable
+        if applicable:
+            properties["$ai_evaluation_result"] = result["verdict"]
+    else:
+        properties["$ai_evaluation_result"] = result["verdict"]
+
+    return properties
+
+
 @dataclass
 class EmitEvaluationEventInputs:
     evaluation: dict[str, Any]
@@ -1004,64 +1099,29 @@ async def emit_evaluation_event_activity(inputs: EmitEvaluationEventInputs) -> N
             logger.exception("Team not found", team_id=event_data["team_id"])
             raise ValueError(f"Team {event_data['team_id']} not found")
 
-        allows_na = result.get("allows_na", False)
-
-        evaluation_type = evaluation.get("evaluation_type", "llm_judge")
-
         source_props = (
             json.loads(event_data["properties"])
             if isinstance(event_data["properties"], str)
             else event_data["properties"]
         )
 
-        properties: dict[str, Any] = {
-            # Evaluation-specific properties
-            "$ai_evaluation_id": evaluation["id"],
-            "$ai_evaluation_name": evaluation["name"],
-            "$ai_evaluation_type": "online",
-            "$ai_evaluation_runtime": evaluation_type,
-            "$ai_evaluation_start_time": start_time.isoformat(),
-            "$ai_evaluation_allows_na": allows_na,
-            "$ai_evaluation_reasoning": result["reasoning"],
-            "$ai_target_event_id": event_data["uuid"],
-            "$ai_target_event_type": event_data["event"],
-            "$ai_target_id": event_data["uuid"],
-            "$ai_target_type": "generation_uuid",
-            "$ai_trace_id": source_props.get("$ai_trace_id"),
-            # Carry the trigger user's session_id from the source event so evals
-            # can link back to the session recording that originated the trace.
-            "$session_id": source_props.get("$session_id"),
-        }
+        properties = build_evaluation_event_properties(evaluation, result, start_time)
+        properties.update(
+            {
+                "$ai_target_event_id": event_data["uuid"],
+                "$ai_target_event_type": event_data["event"],
+                "$ai_target_id": event_data["uuid"],
+                "$ai_target_type": "generation_uuid",
+                "$ai_trace_id": source_props.get("$ai_trace_id"),
+                # Carry the trigger user's session_id from the source event so evals
+                # can link back to the session recording that originated the trace.
+                "$session_id": source_props.get("$session_id"),
+            }
+        )
 
         for property_name in SOURCE_AI_PROPERTIES_TO_COPY:
             if source_props.get(property_name) is not None:
                 properties[property_name] = source_props[property_name]
-
-        if result.get("skipped"):
-            properties["$ai_evaluation_skipped"] = True
-            properties["$ai_evaluation_skip_reason"] = result.get("skip_reason")
-
-        # LLM-specific properties: cost attribution and model info (not applicable for hog evals,
-        # and skipped evaluations never made an API call so attributing them to a model would
-        # pollute cost dashboards with phantom calls).
-        if evaluation_type != "hog" and not result.get("skipped"):
-            properties["$ai_model"] = result.get("model", DEFAULT_JUDGE_MODEL)
-            properties["$ai_provider"] = result.get("provider", "openai")
-            properties["$ai_input_tokens"] = result.get("input_tokens", 0)
-            properties["$ai_output_tokens"] = result.get("output_tokens", 0)
-            properties["$ai_evaluation_model"] = result.get("model", DEFAULT_JUDGE_MODEL)
-            properties["$ai_evaluation_provider"] = result.get("provider", "openai")
-            properties["$ai_evaluation_key_type"] = "byok" if result.get("is_byok") else "posthog"
-            properties["$ai_evaluation_key_id"] = result.get("key_id")
-
-        # Handle result based on allows_na config
-        if allows_na:
-            applicable = result.get("applicable", True)
-            properties["$ai_evaluation_applicable"] = applicable
-            if applicable:
-                properties["$ai_evaluation_result"] = result["verdict"]
-        else:
-            properties["$ai_evaluation_result"] = result["verdict"]
 
         event_timestamp = datetime.now(UTC)
 
@@ -1132,6 +1192,128 @@ async def emit_internal_telemetry_activity(inputs: EmitInternalTelemetryInputs) 
     await database_sync_to_async(_emit_telemetry, thread_sensitive=False)()
 
 
+async def handle_llm_judge_activity_error(
+    e: temporalio.exceptions.ActivityError, evaluation: dict[str, Any], evaluation_type: str
+) -> WorkflowResult | None:
+    """Workflow-side handling of terminal LLM judge errors, shared by the single-event and
+    trace-level workflows. Must run inside a workflow context.
+
+    For skippable terminal errors, disables the evaluation and sends notification emails where
+    appropriate, then returns a skip WorkflowResult the caller should return as-is. For
+    provider-key API errors, records the key state and returns None. Returns None for anything
+    else — the caller must re-raise.
+    """
+    if not (isinstance(e.cause, ApplicationError) and e.cause.details):
+        return None
+
+    details = e.cause.details[0]
+    error_type = details.get("error_type")
+
+    # Handle skippable errors - return success with skip info
+    if error_type in ("trial_limit_reached", "key_invalid", "parse_error", "model_not_allowed"):
+        if error_type in ("trial_limit_reached", "model_not_allowed"):
+            await temporalio.workflow.execute_activity(
+                disable_evaluation_activity,
+                args=[evaluation["id"], evaluation["team_id"], error_type],
+                schedule_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            if error_type == "trial_limit_reached":
+                # Trial exhaustion affects all trial-using evals on the team — stick with
+                # the aggregate email that lists every impacted eval.
+                if temporalio.workflow.patched("trial-usage-email"):
+                    try:
+                        await temporalio.workflow.execute_activity(
+                            send_trial_usage_email_activity,
+                            SendTrialUsageEmailInputs(team_id=evaluation["team_id"], threshold_pct=100),
+                            activity_id=f"send-trial-usage-email-100pct-{evaluation['team_id']}",
+                            schedule_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=RetryPolicy(maximum_attempts=2),
+                        )
+                    except Exception:
+                        temporalio.workflow.logger.exception(
+                            "Failed to send trial exhausted email",
+                            team_id=evaluation["team_id"],
+                        )
+            else:
+                # model_not_allowed is per-eval — send the targeted email with a
+                # per-eval recovery path (pick a supported model for this eval).
+                if temporalio.workflow.patched("eval-disabled-email"):
+                    model = details.get("model", "the selected model")
+                    try:
+                        await temporalio.workflow.execute_activity(
+                            send_evaluation_disabled_email_activity,
+                            SendEvaluationDisabledEmailInputs(
+                                team_id=evaluation["team_id"],
+                                evaluation_id=evaluation["id"],
+                                evaluation_name=evaluation.get("name", "Unknown evaluation"),
+                                status_reason="model_not_allowed",
+                                human_readable_reason=(f"The model '{model}' isn't available on the trial plan."),
+                            ),
+                            activity_id=(f"send-eval-disabled-email-{evaluation['id']}-model_not_allowed"),
+                            schedule_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=RetryPolicy(maximum_attempts=2),
+                        )
+                    except Exception:
+                        temporalio.workflow.logger.exception(
+                            "Failed to send evaluation disabled email",
+                            evaluation_id=evaluation["id"],
+                            team_id=evaluation["team_id"],
+                        )
+        skip_result: WorkflowResult = {
+            "verdict": None,
+            "skipped": True,
+            "skip_reason": error_type,
+            "message": e.cause.message,
+            "evaluation_id": evaluation["id"],
+            "evaluation_type": evaluation_type,
+        }
+        return skip_result
+
+    # Update key state for API-related errors
+    key_id = details.get("key_id")
+    if key_id and error_type in ("auth_error", "permission_error", "quota_error", "rate_limit"):
+        new_state = LLMProviderKey.State.INVALID if error_type == "auth_error" else LLMProviderKey.State.ERROR
+        await temporalio.workflow.execute_activity(
+            update_key_state_activity,
+            args=[key_id, new_state, e.cause.message],
+            schedule_to_close_timeout=timedelta(seconds=10),
+            retry_policy=RetryPolicy(maximum_attempts=2),
+        )
+    return None
+
+
+async def increment_trial_usage_and_notify(evaluation: dict[str, Any]) -> None:
+    """Increment the team's trial eval counter and send threshold emails. Must run inside a
+    workflow context. Shared by the single-event and trace-level workflows; callers gate on
+    `is_byok` / `skipped` so only PostHog-key LLM judge runs consume quota.
+    """
+    threshold_pct = await temporalio.workflow.execute_activity(
+        increment_trial_eval_count_activity,
+        evaluation["team_id"],
+        activity_id=f"increment-trial-{evaluation['id']}",
+        schedule_to_close_timeout=timedelta(seconds=10),
+        retry_policy=RetryPolicy(maximum_attempts=2),
+    )
+
+    if threshold_pct is not None and temporalio.workflow.patched("trial-usage-email"):
+        try:
+            await temporalio.workflow.execute_activity(
+                send_trial_usage_email_activity,
+                SendTrialUsageEmailInputs(team_id=evaluation["team_id"], threshold_pct=threshold_pct),
+                activity_id=f"send-trial-usage-email-{threshold_pct}pct-{evaluation['team_id']}",
+                schedule_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+        except Exception:
+            # Email failure should not fail the evaluation workflow
+            temporalio.workflow.logger.exception(
+                "Failed to send trial usage email",
+                team_id=evaluation["team_id"],
+                threshold_pct=threshold_pct,
+            )
+
+
 @temporalio.workflow.defn(name="run-evaluation")
 class RunEvaluationWorkflow(PostHogWorkflow):
     @staticmethod
@@ -1172,117 +1354,16 @@ class RunEvaluationWorkflow(PostHogWorkflow):
                     retry_policy=LLM_JUDGE_RETRY_POLICY,
                 )
             except temporalio.exceptions.ActivityError as e:
-                if isinstance(e.cause, ApplicationError) and e.cause.details:
-                    details = e.cause.details[0]
-                    error_type = details.get("error_type")
-
-                    # Handle skippable errors - return success with skip info
-                    if error_type in ("trial_limit_reached", "key_invalid", "parse_error", "model_not_allowed"):
-                        if error_type in ("trial_limit_reached", "model_not_allowed"):
-                            await temporalio.workflow.execute_activity(
-                                disable_evaluation_activity,
-                                args=[evaluation["id"], evaluation["team_id"], error_type],
-                                schedule_to_close_timeout=timedelta(seconds=30),
-                                retry_policy=RetryPolicy(maximum_attempts=2),
-                            )
-                            if error_type == "trial_limit_reached":
-                                # Trial exhaustion affects all trial-using evals on the team — stick with
-                                # the aggregate email that lists every impacted eval.
-                                if temporalio.workflow.patched("trial-usage-email"):
-                                    try:
-                                        await temporalio.workflow.execute_activity(
-                                            send_trial_usage_email_activity,
-                                            SendTrialUsageEmailInputs(team_id=evaluation["team_id"], threshold_pct=100),
-                                            activity_id=f"send-trial-usage-email-100pct-{evaluation['team_id']}",
-                                            schedule_to_close_timeout=timedelta(seconds=30),
-                                            retry_policy=RetryPolicy(maximum_attempts=2),
-                                        )
-                                    except Exception:
-                                        temporalio.workflow.logger.exception(
-                                            "Failed to send trial exhausted email",
-                                            team_id=evaluation["team_id"],
-                                        )
-                            else:
-                                # model_not_allowed is per-eval — send the targeted email with a
-                                # per-eval recovery path (pick a supported model for this eval).
-                                if temporalio.workflow.patched("eval-disabled-email"):
-                                    model = details.get("model", "the selected model")
-                                    try:
-                                        await temporalio.workflow.execute_activity(
-                                            send_evaluation_disabled_email_activity,
-                                            SendEvaluationDisabledEmailInputs(
-                                                team_id=evaluation["team_id"],
-                                                evaluation_id=evaluation["id"],
-                                                evaluation_name=evaluation.get("name", "Unknown evaluation"),
-                                                status_reason="model_not_allowed",
-                                                human_readable_reason=(
-                                                    f"The model '{model}' isn't available on the trial plan."
-                                                ),
-                                            ),
-                                            activity_id=(
-                                                f"send-eval-disabled-email-{evaluation['id']}-model_not_allowed"
-                                            ),
-                                            schedule_to_close_timeout=timedelta(seconds=30),
-                                            retry_policy=RetryPolicy(maximum_attempts=2),
-                                        )
-                                    except Exception:
-                                        temporalio.workflow.logger.exception(
-                                            "Failed to send evaluation disabled email",
-                                            evaluation_id=evaluation["id"],
-                                            team_id=evaluation["team_id"],
-                                        )
-                        skip_result: WorkflowResult = {
-                            "verdict": None,
-                            "skipped": True,
-                            "skip_reason": error_type,
-                            "message": e.cause.message,
-                            "evaluation_id": evaluation["id"],
-                            "evaluation_type": evaluation_type,
-                        }
-                        return skip_result
-
-                    # Update key state for API-related errors
-                    key_id = details.get("key_id")
-                    if key_id and error_type in ("auth_error", "permission_error", "quota_error", "rate_limit"):
-                        new_state = (
-                            LLMProviderKey.State.INVALID if error_type == "auth_error" else LLMProviderKey.State.ERROR
-                        )
-                        await temporalio.workflow.execute_activity(
-                            update_key_state_activity,
-                            args=[key_id, new_state, e.cause.message],
-                            schedule_to_close_timeout=timedelta(seconds=10),
-                            retry_policy=RetryPolicy(maximum_attempts=2),
-                        )
+                skip_result = await handle_llm_judge_activity_error(e, evaluation, evaluation_type)
+                if skip_result is not None:
+                    return skip_result
                 raise
 
             # Increment trial eval counter if using PostHog key (LLM judge only — no cost for hog evals).
             # Skipped evaluations (e.g. errored source trace) never made an API call, so they do not
             # consume trial quota.
             if not result.get("is_byok") and not result.get("skipped"):
-                threshold_pct = await temporalio.workflow.execute_activity(
-                    increment_trial_eval_count_activity,
-                    evaluation["team_id"],
-                    activity_id=f"increment-trial-{evaluation['id']}",
-                    schedule_to_close_timeout=timedelta(seconds=10),
-                    retry_policy=RetryPolicy(maximum_attempts=2),
-                )
-
-                if threshold_pct is not None and temporalio.workflow.patched("trial-usage-email"):
-                    try:
-                        await temporalio.workflow.execute_activity(
-                            send_trial_usage_email_activity,
-                            SendTrialUsageEmailInputs(team_id=evaluation["team_id"], threshold_pct=threshold_pct),
-                            activity_id=f"send-trial-usage-email-{threshold_pct}pct-{evaluation['team_id']}",
-                            schedule_to_close_timeout=timedelta(seconds=30),
-                            retry_policy=RetryPolicy(maximum_attempts=2),
-                        )
-                    except Exception:
-                        # Email failure should not fail the evaluation workflow
-                        temporalio.workflow.logger.exception(
-                            "Failed to send trial usage email",
-                            team_id=evaluation["team_id"],
-                            threshold_pct=threshold_pct,
-                        )
+                await increment_trial_usage_and_notify(evaluation)
 
         # Activity 4: Emit evaluation event
         try:

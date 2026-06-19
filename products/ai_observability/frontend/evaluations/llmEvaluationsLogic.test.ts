@@ -61,6 +61,8 @@ const evaluationWithKey = (id: string, providerKeyId: string | null): Evaluation
     output_type: 'boolean',
     output_config: {},
     conditions: [{ id: `cond-${id}`, rollout_percentage: 100, properties: [] }],
+    target: 'generation',
+    target_config: {},
     model_configuration: providerKeyId
         ? {
               provider: 'openai',

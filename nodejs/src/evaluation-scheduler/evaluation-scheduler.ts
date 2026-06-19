@@ -28,7 +28,11 @@ import { AIObservabilityConfig } from '../ai-observability/config'
 import { EvaluationManagerService } from '../ai-observability/services/evaluation-manager.service'
 import { ProviderKeyManagerService } from '../ai-observability/services/provider-key-manager.service'
 import { TaggerManagerService } from '../ai-observability/services/tagger-manager.service'
-import { TemporalService, TemporalServiceConfig } from '../ai-observability/services/temporal.service'
+import {
+    DEFAULT_TRACE_EVALUATION_WINDOW_SECONDS,
+    TemporalService,
+    TemporalServiceConfig,
+} from '../ai-observability/services/temporal.service'
 import { Evaluation, EvaluationConditionSet, Matchable, Tagger } from '../ai-observability/types'
 import { execHog } from '../cdp/utils/hog-exec'
 import { KAFKA_CLICKHOUSE_AI_EVENTS_JSON, KAFKA_EVENTS_JSON, prefix as KAFKA_PREFIX } from '../config/kafka-topics'
@@ -161,6 +165,26 @@ export function groupEventsByTeam(events: RawKafkaEvent[]): Map<number, RawKafka
     return grouped
 }
 
+/**
+ * Pull the trace linkage out of an event's properties. Trace ids are user-controlled and can
+ * be ingested as numbers (e.g. a buggy `trace_id: 0`), so values are string-coerced; empty or
+ * missing ids resolve to null.
+ */
+export function extractTraceContext(event: RawKafkaEvent): { traceId: string | null; sessionId: string | null } {
+    let properties: Record<string, unknown> = {}
+    try {
+        properties = parseJSON(event.properties || '{}')
+    } catch {
+        return { traceId: null, sessionId: null }
+    }
+    const coerce = (value: unknown): string | null =>
+        value === null || value === undefined || value === '' ? null : String(value)
+    return {
+        traceId: coerce(properties['$ai_trace_id']),
+        sessionId: coerce(properties['$session_id']),
+    }
+}
+
 export function checkRolloutPercentage(eventId: string, rolloutPercentage: number): boolean {
     if (rolloutPercentage >= 100) {
         return true
@@ -245,7 +269,16 @@ export type EvaluationMatchResult =
     | { matched: false; reason: 'no_conditions' | 'disabled' | 'filtered' | 'sampling_excluded' }
 
 export class EvaluationMatcher {
-    async shouldTriggerEvaluation(event: RawKafkaEvent, evaluation: Matchable): Promise<EvaluationMatchResult> {
+    /**
+     * `samplingKey` defaults to the event uuid (independent coin flip per generation). Trace-
+     * target evals pass the trace id instead so the whole trace is atomically in or out of the
+     * sample, no matter which of its generations is seen first.
+     */
+    async shouldTriggerEvaluation(
+        event: RawKafkaEvent,
+        evaluation: Matchable,
+        samplingKey?: string
+    ): Promise<EvaluationMatchResult> {
         if (!evaluation.enabled) {
             return { matched: false, reason: 'disabled' }
         }
@@ -262,7 +295,7 @@ export class EvaluationMatcher {
                 continue
             }
 
-            const inSample = checkRolloutPercentage(event.uuid, condition.rollout_percentage)
+            const inSample = checkRolloutPercentage(samplingKey ?? event.uuid, condition.rollout_percentage)
 
             if (!inSample) {
                 continue
@@ -478,7 +511,21 @@ async function processEventEvaluationMatch(
 ): Promise<void> {
     evaluationSchedulerEventsProcessed.labels({ status: 'received', type: 'evaluation' }).inc()
 
-    const result = await matcher.shouldTriggerEvaluation(event, evaluationDefinition)
+    const isTraceTarget = evaluationDefinition.target === 'trace'
+    let traceContext: ReturnType<typeof extractTraceContext> | null = null
+    if (isTraceTarget) {
+        traceContext = extractTraceContext(event)
+        if (!traceContext.traceId) {
+            evaluationMatchesCounter.labels({ outcome: 'no_trace_id', type: 'evaluation' }).inc()
+            return
+        }
+    }
+
+    const result = await matcher.shouldTriggerEvaluation(
+        event,
+        evaluationDefinition,
+        traceContext?.traceId ?? undefined
+    )
 
     if (!result.matched) {
         evaluationMatchesCounter.labels({ outcome: result.reason, type: 'evaluation' }).inc()
@@ -494,16 +541,29 @@ async function processEventEvaluationMatch(
     logger.debug('Evaluation matched, enqueueing evaluation run', {
         evaluationId: evaluationDefinition.id,
         eventUuid: event.uuid,
+        traceId: traceContext?.traceId,
         conditionId: result.conditionId,
     })
 
     evaluationMatchesCounter.labels({ outcome: 'matched', type: 'evaluation' }).inc()
 
-    await temporalService.startEvaluationRunWorkflow(
-        evaluationDefinition.id,
-        event,
-        evaluationDefinition.evaluation_type as string
-    )
+    if (isTraceTarget && traceContext?.traceId) {
+        const windowSeconds =
+            evaluationDefinition.target_config?.window_seconds ?? DEFAULT_TRACE_EVALUATION_WINDOW_SECONDS
+        await temporalService.startTraceEvaluationRunWorkflow(
+            evaluationDefinition.id,
+            event,
+            traceContext.traceId,
+            traceContext.sessionId,
+            windowSeconds
+        )
+    } else {
+        await temporalService.startEvaluationRunWorkflow(
+            evaluationDefinition.id,
+            event,
+            evaluationDefinition.evaluation_type as string
+        )
+    }
     evaluationSchedulerEventsProcessed.labels({ status: 'success', type: 'evaluation' }).inc()
 }
 

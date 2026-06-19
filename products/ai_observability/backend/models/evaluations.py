@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 from posthog.models.activity_logging.model_activity import ModelActivityMixin
 from posthog.models.utils import UUIDTModel
 
-from .evaluation_configs import EvaluationType, OutputType, validate_evaluation_configs
+from .evaluation_configs import EvaluationType, OutputType, validate_evaluation_configs, validate_target_config
 
 logger = structlog.get_logger(__name__)
 
@@ -26,6 +26,11 @@ class EvaluationStatusReason(models.TextChoices):
     TRIAL_LIMIT_REACHED = "trial_limit_reached", "Trial evaluation limit reached"
     MODEL_NOT_ALLOWED = "model_not_allowed", "Model not available on the trial plan"
     PROVIDER_KEY_DELETED = "provider_key_deleted", "Provider API key was deleted"
+
+
+class EvaluationTarget(models.TextChoices):
+    GENERATION = "generation", "Generation"
+    TRACE = "trace", "Trace"
 
 
 class Evaluation(ModelActivityMixin, UUIDTModel):
@@ -55,6 +60,18 @@ class Evaluation(ModelActivityMixin, UUIDTModel):
     output_config = models.JSONField(default=dict)
 
     conditions = models.JSONField(default=list)
+
+    # What unit the evaluation runs on: a single $ai_generation event, or the whole trace
+    # (debounced and pulled from ClickHouse after an aggregation window).
+    target = models.CharField(
+        max_length=20,
+        choices=EvaluationTarget,
+        default=EvaluationTarget.GENERATION,
+        db_default=EvaluationTarget.GENERATION,
+    )
+    # Target-specific settings, keyed off `target` (parallel to evaluation_config/output_config).
+    # Trace targets carry {window_seconds}; generation targets carry nothing.
+    target_config = models.JSONField(default=dict)
 
     # Model configuration for the LLM judge
     model_configuration = models.ForeignKey(
@@ -163,6 +180,12 @@ class Evaluation(ModelActivityMixin, UUIDTModel):
                 )
             except ValueError as e:
                 raise ValidationError(str(e))
+
+        # Validate target config (defaults the trace window when absent, strips it for generation).
+        try:
+            self.target_config = validate_target_config(self.target, self.target_config)
+        except ValueError as e:
+            raise ValidationError({"target_config": str(e)})
 
         # Compile Hog source to bytecode
         if self.evaluation_type == EvaluationType.HOG and self.evaluation_config.get("source"):
