@@ -1,3 +1,4 @@
+import copy
 import json
 
 from django.db import transaction
@@ -95,7 +96,7 @@ class CustomPropertyDefinitionViewSet(TeamAndOrgViewSetMixin, AccessControlViewS
         log_activity_from_viewset(self, serializer.instance, name=serializer.instance.name)
 
     def perform_update(self, serializer):
-        previous = self.get_object()
+        previous = copy.deepcopy(serializer.instance)
         serializer.save()
         log_activity_from_viewset(self, serializer.instance, name=serializer.instance.name, previous=previous)
 
