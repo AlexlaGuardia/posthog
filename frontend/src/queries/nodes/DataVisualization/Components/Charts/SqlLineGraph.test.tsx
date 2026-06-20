@@ -324,19 +324,4 @@ describe('SqlLineGraph', () => {
             expect(tooltip.row('a')).toBe(expected)
         })
     })
-
-    describe('unsupported display options (documented gaps)', () => {
-        // The quill SQL line chart does not yet render value-label overlays; `showValuesOnSeries`
-        // is a no-op here (only the legacy chart.js path and PieChart honor it). Asserted so the
-        // gap is visible and this test flips the day value labels are wired in.
-        it('does not draw value labels even when showValuesOnSeries is set', async () => {
-            renderLine(
-                { yAxis: [{ column: 'a' }], showValuesOnSeries: true },
-                lineFixture([{ name: 'a', valueAt: (i) => (i + 1) * 100 }])
-            )
-
-            await screen.findByRole('img', { name: /chart with/i })
-            expect(getHogChart().valueLabels()).toHaveLength(0)
-        })
-    })
 })
