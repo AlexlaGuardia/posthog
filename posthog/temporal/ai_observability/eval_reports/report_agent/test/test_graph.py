@@ -1,9 +1,12 @@
 """Tests for the v2 graph helpers: _fallback_content and _validate_agent_output."""
 
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 
 from parameterized import parameterized
 
+from posthog.temporal.ai_observability.eval_reports.report_agent import graph
 from posthog.temporal.ai_observability.eval_reports.report_agent.graph import (
     _append_references_section,
     _fallback_content,
@@ -206,3 +209,14 @@ class TestAppendReferencesSection(SimpleTestCase):
         # Agent's last section is preserved
         self.assertEqual(content.sections[MAX_REPORT_SECTIONS - 1].title, f"S{MAX_REPORT_SECTIONS - 1}")
         self.assertEqual(content.sections[-1].title, "References")
+
+
+class TestGetLlm(SimpleTestCase):
+    """The report agent's client construction routes through the shared ai-gateway helper."""
+
+    def test_delegates_to_build_openai_chat_client(self):
+        with patch.object(graph, "build_openai_chat_client") as mock_build:
+            result = graph._get_llm("gpt-5.2", 600.0)
+
+        mock_build.assert_called_once_with("gpt-5.2", 600.0)
+        self.assertIs(result, mock_build.return_value)
