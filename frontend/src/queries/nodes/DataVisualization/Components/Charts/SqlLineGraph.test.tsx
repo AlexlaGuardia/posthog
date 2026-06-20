@@ -9,6 +9,8 @@ import {
     type DataVizFixture,
     buildDataVisualizationQuery,
     getHogChart,
+    HOVER,
+    MONTHS,
     renderDataVisualization,
     sqlChart,
 } from '~/test/insight-testing'
@@ -34,9 +36,6 @@ afterEach(() => {
     cleanup()
 })
 
-const MONTHS = ['2025-10-01', '2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01']
-const HOVER = 2
-
 /** One numeric column per name, six monthly rows; `valueAt(i)` fills each column. */
 function lineFixture(columns: { name: string; type?: string; valueAt: (i: number) => unknown }[]): DataVizFixture {
     return {
@@ -45,6 +44,13 @@ function lineFixture(columns: { name: string; type?: string; valueAt: (i: number
         results: MONTHS.map((m, i) => [m, ...columns.map((c) => c.valueAt(i))]),
     }
 }
+
+/** Two numeric series (a × 100, b × 10) over the shared months — the common multi-series fixture. */
+const twoSeries = (): DataVizFixture =>
+    lineFixture([
+        { name: 'a', valueAt: (i) => (i + 1) * 100 },
+        { name: 'b', valueAt: (i) => (i + 1) * 10 },
+    ])
 
 const renderLine = (
     chartSettings: ChartSettings,
@@ -77,13 +83,7 @@ describe('SqlLineGraph', () => {
         })
 
         it('shows one row per series with its own value', async () => {
-            renderLine(
-                { yAxis: [{ column: 'a' }, { column: 'b' }] },
-                lineFixture([
-                    { name: 'a', valueAt: (i) => (i + 1) * 100 },
-                    { name: 'b', valueAt: (i) => (i + 1) * 10 },
-                ])
-            )
+            renderLine({ yAxis: [{ column: 'a' }, { column: 'b' }] }, twoSeries())
 
             await screen.findByRole('img', { name: /chart with 2 data series/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
@@ -117,13 +117,7 @@ describe('SqlLineGraph', () => {
             { name: 'shows a total row for two or more series', showTotalRow: undefined, expectedTotal: '330' },
             { name: 'hides the total row when showTotalRow is false', showTotalRow: false, expectedTotal: undefined },
         ])('$name', async ({ showTotalRow, expectedTotal }) => {
-            renderLine(
-                { yAxis: [{ column: 'a' }, { column: 'b' }], showTotalRow },
-                lineFixture([
-                    { name: 'a', valueAt: (i) => (i + 1) * 100 },
-                    { name: 'b', valueAt: (i) => (i + 1) * 10 },
-                ])
-            )
+            renderLine({ yAxis: [{ column: 'a' }, { column: 'b' }], showTotalRow }, twoSeries())
 
             await screen.findByRole('img', { name: /chart with 2 data series/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
@@ -141,10 +135,7 @@ describe('SqlLineGraph', () => {
                         { column: 'b', settings: { display: { color: '#00ff00' } } },
                     ],
                 },
-                lineFixture([
-                    { name: 'a', valueAt: (i) => (i + 1) * 100 },
-                    { name: 'b', valueAt: (i) => (i + 1) * 10 },
-                ])
+                twoSeries()
             )
 
             await screen.findByRole('img', { name: /chart with 2 data series/i })
@@ -155,12 +146,6 @@ describe('SqlLineGraph', () => {
     })
 
     describe('legend', () => {
-        const twoSeries = (): DataVizFixture =>
-            lineFixture([
-                { name: 'a', valueAt: (i) => (i + 1) * 100 },
-                { name: 'b', valueAt: (i) => (i + 1) * 10 },
-            ])
-
         const getLegend = (container: HTMLElement): HTMLElement =>
             container.querySelector<HTMLElement>('[data-attr="hog-chart-timeseries-line-legend"]')!
 
@@ -311,10 +296,7 @@ describe('SqlLineGraph', () => {
                     display: ChartDisplayType.ActionsAreaGraph,
                     chartSettings: { xAxis: { column: 'month' }, yAxis: [{ column: 'a' }, { column: 'b' }] },
                 }),
-                response: lineFixture([
-                    { name: 'a', valueAt: (i) => (i + 1) * 100 },
-                    { name: 'b', valueAt: (i) => (i + 1) * 10 },
-                ]),
+                response: twoSeries(),
             })
 
             await screen.findByRole('img', { name: /chart with 2 data series/i })
@@ -327,20 +309,19 @@ describe('SqlLineGraph', () => {
         const withGap = (): DataVizFixture =>
             lineFixture([{ name: 'a', valueAt: (i) => (i === HOVER ? null : (i + 1) * 100) }])
 
-        it('draws a null as a gap — the point is absent from the tooltip', async () => {
-            renderLine({ yAxis: [{ column: 'a' }] }, withGap())
+        it.each([
+            {
+                name: 'draws a null as a gap — the point is absent from the tooltip',
+                showNullsAsZero: undefined,
+                expected: undefined,
+            },
+            { name: 'plots a null as zero when showNullsAsZero is set', showNullsAsZero: true, expected: '0' },
+        ])('$name', async ({ showNullsAsZero, expected }) => {
+            renderLine({ yAxis: [{ column: 'a' }], showNullsAsZero }, withGap())
 
             await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
-            expect(tooltip.row('a')).toBeUndefined()
-        })
-
-        it('plots a null as zero when showNullsAsZero is set', async () => {
-            renderLine({ yAxis: [{ column: 'a' }], showNullsAsZero: true }, withGap())
-
-            await screen.findByRole('img', { name: /chart with/i })
-            const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
-            expect(tooltip.row('a')).toBe('0')
+            expect(tooltip.row('a')).toBe(expected)
         })
     })
 
