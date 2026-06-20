@@ -77,8 +77,8 @@ describe('SqlLineGraph', () => {
             await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
 
-            expect(tooltip.row('pageviews')).toBe('300')
-            expect(tooltip.title()).toBe('2025-12-01')
+            expect(tooltip.value('pageviews')).toBe('300')
+            expect(tooltip.label()).toBe('2025-12-01')
             expect(tooltip.swatchColors()).toHaveLength(1)
         })
 
@@ -89,8 +89,8 @@ describe('SqlLineGraph', () => {
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
 
             expect(tooltip.rows()).toEqual(['a', 'b'])
-            expect(tooltip.row('a')).toBe('300')
-            expect(tooltip.row('b')).toBe('30')
+            expect(tooltip.value('a')).toBe('300')
+            expect(tooltip.value('b')).toBe('30')
         })
 
         it.each<{ name: string; formatting: ChartSettingsFormatting; value: number; expected: string }>([
@@ -110,7 +110,7 @@ describe('SqlLineGraph', () => {
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
 
             // compactNumber separates magnitude with a non-breaking space; normalize for comparison.
-            expect(tooltip.row('a')?.replace(/\u00a0/g, ' ')).toBe(expected)
+            expect(tooltip.value('a')?.replace(/\u00a0/g, ' ')).toBe(expected)
         })
 
         it.each([
@@ -301,7 +301,7 @@ describe('SqlLineGraph', () => {
 
             await screen.findByRole('img', { name: /chart with 2 data series/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
-            expect(tooltip.row('a')).toBe('300')
+            expect(tooltip.value('a')).toBe('300')
         })
     })
 
@@ -321,7 +321,7 @@ describe('SqlLineGraph', () => {
 
             await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
-            expect(tooltip.row('a')).toBe(expected)
+            expect(tooltip.value('a')).toBe(expected)
         })
     })
 })
