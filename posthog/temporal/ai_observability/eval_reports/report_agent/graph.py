@@ -1,10 +1,7 @@
 """LangGraph agent for evaluation report generation using create_react_agent."""
 
-import os
 import uuid
 from typing import Any
-
-from django.conf import settings
 
 import structlog
 import posthoganalytics
@@ -15,7 +12,6 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from posthoganalytics.ai.langchain.callbacks import CallbackHandler
 
-from posthog.cloud_utils import is_cloud
 from posthog.temporal.ai_observability.eval_reports.report_agent.prompts import EVAL_REPORT_SYSTEM_PROMPT
 from posthog.temporal.ai_observability.eval_reports.report_agent.schema import (
     MAX_REPORT_SECTIONS,
@@ -30,25 +26,19 @@ from posthog.temporal.ai_observability.eval_reports.report_agent.tools import (
     _ch_ts,
     _fetch_period_counts,
 )
+from posthog.temporal.ai_observability.llm_endpoint import build_openai_chat_client
 
 logger = structlog.get_logger(__name__)
 
 
 def _get_llm(model: str, timeout: float) -> ChatOpenAI:
-    """Create an OpenAI chat client for the report agent."""
-    if not settings.DEBUG and not is_cloud():
-        raise Exception("AI features are only available in PostHog Cloud")
+    """Create an OpenAI chat client for the report agent.
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise Exception("OpenAI API key is not configured")
-
-    return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        timeout=timeout,
-        max_retries=2,
-    )
+    Routes through the internal Go ai-gateway when AI_GATEWAY_URL +
+    AI_GATEWAY_API_KEY are set; otherwise goes direct to OpenAI. The
+    Cloud/DEBUG guardrail lives in the shared helper.
+    """
+    return build_openai_chat_client(model, timeout)
 
 
 def _compute_metrics(
