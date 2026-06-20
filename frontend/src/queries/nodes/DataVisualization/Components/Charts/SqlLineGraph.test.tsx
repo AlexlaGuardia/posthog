@@ -36,7 +36,6 @@ afterEach(() => {
     cleanup()
 })
 
-/** One numeric column per name, six monthly rows; `valueAt(i)` fills each column. */
 function lineFixture(columns: { name: string; type?: string; valueAt: (i: number) => unknown }[]): DataVizFixture {
     return {
         columns: ['month', ...columns.map((c) => c.name)],
@@ -45,7 +44,6 @@ function lineFixture(columns: { name: string; type?: string; valueAt: (i: number
     }
 }
 
-/** Two numeric series (a × 100, b × 10) over the shared months — the common multi-series fixture. */
 const twoSeries = (): DataVizFixture =>
     lineFixture([
         { name: 'a', valueAt: (i) => (i + 1) * 100 },
@@ -74,12 +72,11 @@ describe('SqlLineGraph', () => {
                 lineFixture([{ name: 'pageviews', valueAt: (i) => (i + 1) * 100 }])
             )
 
-            await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
 
             expect(tooltip.value('pageviews')).toBe('300')
             expect(tooltip.label()).toBe('2025-12-01')
-            expect(tooltip.swatchColors()).toHaveLength(1)
+            expect(tooltip.swatchColors()).toEqual([expect.stringMatching(/^rgb/)])
         })
 
         it('shows one row per series with its own value', async () => {
@@ -106,7 +103,6 @@ describe('SqlLineGraph', () => {
                 lineFixture([{ name: 'a', type: 'Float64', valueAt: (i) => (i === HOVER ? value : value / 2) }])
             )
 
-            await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
 
             // compactNumber separates magnitude with a non-breaking space; normalize for comparison.
@@ -283,14 +279,12 @@ describe('SqlLineGraph', () => {
             await screen.findByRole('img', { name: /chart with/i })
             const lines = getHogChart().referenceLines()
             expect(lines.map((l) => l.label)).toEqual(expectedLabels)
-            for (const line of lines) {
-                expect(line.orientation).toBe('horizontal')
-            }
+            expect(lines.map((l) => l.orientation)).toEqual(expectedLabels.map(() => 'horizontal'))
         })
     })
 
     describe('area chart', () => {
-        it('renders an area graph without crashing', async () => {
+        it('renders an area graph with the correct tooltip value', async () => {
             renderDataVisualization({
                 query: buildDataVisualizationQuery({
                     display: ChartDisplayType.ActionsAreaGraph,
@@ -319,7 +313,6 @@ describe('SqlLineGraph', () => {
         ])('$name', async ({ showNullsAsZero, expected }) => {
             renderLine({ yAxis: [{ column: 'a' }], showNullsAsZero }, withGap())
 
-            await screen.findByRole('img', { name: /chart with/i })
             const tooltip = await sqlChart.hoverTooltip(HOVER, MONTHS.length)
             expect(tooltip.value('a')).toBe(expected)
         })
